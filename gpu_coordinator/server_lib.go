@@ -10,7 +10,7 @@ import (
 // gpuCoordinatorServer implements the GPUCoordinator service
 type gpuCoordinatorServer struct {
     pb.UnimplementedGPUCoordinatorServer
-    // Add necessary fields like communicators, device list, etc.
+    // TODO: Add necessary fields like communicators, device list, etc.
 }
 
 // CommInit initializes a new communicator

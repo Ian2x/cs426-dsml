@@ -10,7 +10,7 @@ import (
 // gpuDeviceServer implements the GPUDevice service
 type gpuDeviceServer struct {
     pb.UnimplementedGPUDeviceServer
-    // Add necessary fields like device ID, memory space, etc.
+    // TODO: Add necessary fields like device ID, memory space, etc.
 }
 
 // GetDeviceMetadata returns the device metadata
