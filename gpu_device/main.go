@@ -10,7 +10,7 @@ import (
 
 func main() {
     // Listen on a designated port
-    lis, err := net.Listen("tcp", ":50051") // Change port if needed
+    lis, err := net.Listen("tcp", ":8081") // Change port if needed
     if err != nil {
         log.Fatalf("Failed to listen: %v", err)
     }

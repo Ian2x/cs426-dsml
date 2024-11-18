@@ -11,7 +11,7 @@ import (
 
 func main() {
     // Establish a connection to the GPUCoordinator server
-    conn, err := grpc.Dial("localhost:50052", grpc.WithInsecure())
+    conn, err := grpc.Dial("localhost:8082", grpc.WithInsecure())
     if err != nil {
         log.Fatalf("Did not connect: %v", err)
     }

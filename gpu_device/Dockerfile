@@ -1,17 +1,16 @@
-# Use an official Golang runtime as a parent image
-FROM golang:1.16
+FROM golang:1.23
 
-# Set the working directory
+# Set working directory
 WORKDIR /app
 
-# Copy the current directory contents into the container
+# Copy the current directory contents into container
 COPY . .
 
-# Build the application
+# Build
 RUN go build -o gpu_device_server .
 
-# Expose port (match the port in main.go)
-EXPOSE 50051
+# Port
+EXPOSE 8081
 
-# Run the executable
+# Run
 CMD ["./gpu_device_server"]
