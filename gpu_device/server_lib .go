@@ -3,14 +3,32 @@ package main
 import (
     "context"
     pb "../proto"
-    // "os"        // For file handling if needed
-    // "sync"      // For synchronization primitives
+    "sync"
+    "sync/atomic"
+    // "os"
 )
 
 // gpuDeviceServer implements the GPUDevice service
 type gpuDeviceServer struct {
     pb.UnimplementedGPUDeviceServer
-    // TODO: Add necessary fields like device ID, memory space, etc.
+    
+    // DeviceMetadata
+    deviceId    uint64
+    rank        uint64
+    minMemAddr  uint64
+    maxMemAddr  uint64
+
+    // Simulated memory
+    memory      []byte
+    memoryMutex sync.Mutex
+
+    // 
+    peers       map[uint32]*DeviceInfo
+    isHealthy   bool
+    nextStreamID uint64
+
+
+
 }
 
 // GetDeviceMetadata returns the device metadata

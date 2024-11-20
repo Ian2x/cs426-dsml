@@ -75,6 +75,7 @@ message BeginReceiveResponse {
 message DataChunk {
   bytes data = 1;
   // You may add more fields here
+  StreamId streamId = 2;
 }
 
 message StreamSendResponse {
@@ -124,6 +125,7 @@ message CommInitResponse {
   uint64 commId = 2;
   repeated DeviceMetadata devices = 3;
   // Add more metadata here if needed
+  // TODO??
 }
 
 message GetCommStatusRequest {
