@@ -197,7 +197,7 @@ func (s *gpuDeviceServer) StreamSend(stream pb.GPUDevice_StreamSendServer) error
     s.mu.Lock()
     defer s.mu.Unlock()
     memAddr := streamInfo.recvBuffAddr - s.minMemAddr
-    if memAddr+dataLen > uint64(len(s.memory)) {
+    if memAddr < 0 || memAddr+dataLen > uint64(len(s.memory)) {
         s.streams[streamID] = pb.Status_FAILED
         return errors.New("Memory write out of bounds")
     }
@@ -224,6 +224,70 @@ func (s *gpuDeviceServer) GetStreamStatus(ctx context.Context, req *pb.GetStream
         Status: streamInfo.status,
     }, nil
 }
+
+func (s *gpuDeviceServer) MemcpyHostToDevice(stream pb.GPUDevice_MemcpyHostToDeviceServer) error {
+    // Retrieve dstMemAddr from context
+    md, ok := metadata.FromIncomingContext(stream.Context())
+    if !ok {
+        return fmt.Errorf("Missing MemcpyHostToDevice metadata")
+    }
+    dstMemAddrs := md.Get("dstmemaddr")
+    if len(dstMemAddrs) == 0 {
+        return fmt.Errorf("Missing dstmemaddr from MemcpyHostToDevice metadata")
+    }
+    dstMemAddr, err := strconv.ParseUint(dstMemAddrs[0], 10, 64)
+    if err != nil {
+        return fmt.Errorf("Invalid dstmemaddr from MemcpyHostToDevice metadata")
+    }
+    
+    // Receive data
+    message, err := stream.Recv()
+    if err != nil {
+        return fmt.Errorf("Failed to receive MemcpyHostToDevice stream: %v", err)
+    }
+
+    data := message.Data
+    dataLen := uint64(len(data))
+
+    // Write data to memory
+    s.mu.Lock()
+    memAddr := dstMemAddr - s.minMemAddr
+    if memAddr < 0 || memAddr + dataLen > uint64(len(s.memory)) {
+        s.mu.Unlock()
+        return fmt.Errorf("MemcpyHostToDevice has write out of bounds")
+    }
+    copy(s.memory[memAddr:memAddr+dataLen], data)
+    s.mu.Unlock()
+
+    return stream.SendAndClose(&pb.MemcpyHostToDeviceResponse{Success: true})
+}
+
+func (s *gpuDeviceServer) MemcpyDeviceToHost(req *pb.MemcpyDeviceToHostRequest, stream pb.GPUDevice_MemcpyDeviceToHostServer) error {
+    // Retrieve srcMemAddr and numBytes from req
+    srcMemAddr := req.SrcMemAddr.Value
+    numBytes := req.NumBytes
+
+    // Read data from memory
+    s.mu.Lock()
+    memAddr := srcMemAddr - s.minMemAddr
+    if memAddr < 0 || memAddr + numBytes > uint64(len(s.memory)){
+        s.mu.Unlock()
+        return fmt.Errorf("MemcpyDeviceToHost has read out of bounds")
+    }
+    data := s.memory[memAddr : memAddr+numBytes]
+    s.mu.Unlock()
+
+    // Send data
+    chunk := &pb.DataChunk{
+        Data: data,
+    }
+    if err := stream.Send(chunk); err != nil {
+        return err
+    }
+
+    return nil
+}
+
 
 func (s *gpuDeviceServer) processOperations() {
     for {

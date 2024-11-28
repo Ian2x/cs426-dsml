@@ -19,11 +19,13 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	GPUDevice_GetDeviceMetadata_FullMethodName = "/gpu_sim.GPUDevice/GetDeviceMetadata"
-	GPUDevice_BeginSend_FullMethodName         = "/gpu_sim.GPUDevice/BeginSend"
-	GPUDevice_BeginReceive_FullMethodName      = "/gpu_sim.GPUDevice/BeginReceive"
-	GPUDevice_StreamSend_FullMethodName        = "/gpu_sim.GPUDevice/StreamSend"
-	GPUDevice_GetStreamStatus_FullMethodName   = "/gpu_sim.GPUDevice/GetStreamStatus"
+	GPUDevice_GetDeviceMetadata_FullMethodName  = "/gpu_sim.GPUDevice/GetDeviceMetadata"
+	GPUDevice_BeginSend_FullMethodName          = "/gpu_sim.GPUDevice/BeginSend"
+	GPUDevice_BeginReceive_FullMethodName       = "/gpu_sim.GPUDevice/BeginReceive"
+	GPUDevice_StreamSend_FullMethodName         = "/gpu_sim.GPUDevice/StreamSend"
+	GPUDevice_GetStreamStatus_FullMethodName    = "/gpu_sim.GPUDevice/GetStreamStatus"
+	GPUDevice_MemcpyHostToDevice_FullMethodName = "/gpu_sim.GPUDevice/MemcpyHostToDevice"
+	GPUDevice_MemcpyDeviceToHost_FullMethodName = "/gpu_sim.GPUDevice/MemcpyDeviceToHost"
 )
 
 // GPUDeviceClient is the client API for GPUDevice service.
@@ -42,6 +44,9 @@ type GPUDeviceClient interface {
 	StreamSend(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[DataChunk, StreamSendResponse], error)
 	// For the coordinator to know if a stream has completed.
 	GetStreamStatus(ctx context.Context, in *GetStreamStatusRequest, opts ...grpc.CallOption) (*GetStreamStatusResponse, error)
+	// TODO: Added for Memcpy operations
+	MemcpyHostToDevice(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[DataChunk, MemcpyHostToDeviceResponse], error)
+	MemcpyDeviceToHost(ctx context.Context, in *MemcpyDeviceToHostRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DataChunk], error)
 }
 
 type gPUDeviceClient struct {
@@ -105,6 +110,38 @@ func (c *gPUDeviceClient) GetStreamStatus(ctx context.Context, in *GetStreamStat
 	return out, nil
 }
 
+func (c *gPUDeviceClient) MemcpyHostToDevice(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[DataChunk, MemcpyHostToDeviceResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &GPUDevice_ServiceDesc.Streams[1], GPUDevice_MemcpyHostToDevice_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[DataChunk, MemcpyHostToDeviceResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type GPUDevice_MemcpyHostToDeviceClient = grpc.ClientStreamingClient[DataChunk, MemcpyHostToDeviceResponse]
+
+func (c *gPUDeviceClient) MemcpyDeviceToHost(ctx context.Context, in *MemcpyDeviceToHostRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DataChunk], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &GPUDevice_ServiceDesc.Streams[2], GPUDevice_MemcpyDeviceToHost_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[MemcpyDeviceToHostRequest, DataChunk]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type GPUDevice_MemcpyDeviceToHostClient = grpc.ServerStreamingClient[DataChunk]
+
 // GPUDeviceServer is the server API for GPUDevice service.
 // All implementations must embed UnimplementedGPUDeviceServer
 // for forward compatibility.
@@ -121,6 +158,9 @@ type GPUDeviceServer interface {
 	StreamSend(grpc.ClientStreamingServer[DataChunk, StreamSendResponse]) error
 	// For the coordinator to know if a stream has completed.
 	GetStreamStatus(context.Context, *GetStreamStatusRequest) (*GetStreamStatusResponse, error)
+	// TODO: Added for Memcpy operations
+	MemcpyHostToDevice(grpc.ClientStreamingServer[DataChunk, MemcpyHostToDeviceResponse]) error
+	MemcpyDeviceToHost(*MemcpyDeviceToHostRequest, grpc.ServerStreamingServer[DataChunk]) error
 	mustEmbedUnimplementedGPUDeviceServer()
 }
 
@@ -145,6 +185,12 @@ func (UnimplementedGPUDeviceServer) StreamSend(grpc.ClientStreamingServer[DataCh
 }
 func (UnimplementedGPUDeviceServer) GetStreamStatus(context.Context, *GetStreamStatusRequest) (*GetStreamStatusResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetStreamStatus not implemented")
+}
+func (UnimplementedGPUDeviceServer) MemcpyHostToDevice(grpc.ClientStreamingServer[DataChunk, MemcpyHostToDeviceResponse]) error {
+	return status.Errorf(codes.Unimplemented, "method MemcpyHostToDevice not implemented")
+}
+func (UnimplementedGPUDeviceServer) MemcpyDeviceToHost(*MemcpyDeviceToHostRequest, grpc.ServerStreamingServer[DataChunk]) error {
+	return status.Errorf(codes.Unimplemented, "method MemcpyDeviceToHost not implemented")
 }
 func (UnimplementedGPUDeviceServer) mustEmbedUnimplementedGPUDeviceServer() {}
 func (UnimplementedGPUDeviceServer) testEmbeddedByValue()                   {}
@@ -246,6 +292,24 @@ func _GPUDevice_GetStreamStatus_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _GPUDevice_MemcpyHostToDevice_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(GPUDeviceServer).MemcpyHostToDevice(&grpc.GenericServerStream[DataChunk, MemcpyHostToDeviceResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type GPUDevice_MemcpyHostToDeviceServer = grpc.ClientStreamingServer[DataChunk, MemcpyHostToDeviceResponse]
+
+func _GPUDevice_MemcpyDeviceToHost_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(MemcpyDeviceToHostRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(GPUDeviceServer).MemcpyDeviceToHost(m, &grpc.GenericServerStream[MemcpyDeviceToHostRequest, DataChunk]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type GPUDevice_MemcpyDeviceToHostServer = grpc.ServerStreamingServer[DataChunk]
+
 // GPUDevice_ServiceDesc is the grpc.ServiceDesc for GPUDevice service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -275,6 +339,16 @@ var GPUDevice_ServiceDesc = grpc.ServiceDesc{
 			StreamName:    "StreamSend",
 			Handler:       _GPUDevice_StreamSend_Handler,
 			ClientStreams: true,
+		},
+		{
+			StreamName:    "MemcpyHostToDevice",
+			Handler:       _GPUDevice_MemcpyHostToDevice_Handler,
+			ClientStreams: true,
+		},
+		{
+			StreamName:    "MemcpyDeviceToHost",
+			Handler:       _GPUDevice_MemcpyDeviceToHost_Handler,
+			ServerStreams: true,
 		},
 	},
 	Metadata: "gpu_sim.proto",

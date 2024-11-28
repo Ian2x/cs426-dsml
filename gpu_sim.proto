@@ -2,7 +2,8 @@ syntax = "proto3";
 
 package gpu_sim;
 
-option go_package = "cs426-dsml/proto;proto";
+// Adjusted to desired (protoc --go_out=. --go-grpc_out=. gpu_sim.proto)
+option go_package = "./proto;proto";
 
 message DeviceId {
   uint64 value = 1;
@@ -41,6 +42,10 @@ service GPUDevice {
 
   // For the coordinator to know if a stream has completed.
   rpc GetStreamStatus(GetStreamStatusRequest) returns (GetStreamStatusResponse) {}
+
+  // TODO: Added for Memcpy operations
+  rpc MemcpyHostToDevice(stream DataChunk) returns (MemcpyHostToDeviceResponse) {}
+  rpc MemcpyDeviceToHost(MemcpyDeviceToHostRequest) returns (stream DataChunk) {}
 }
 
 message GetDeviceMetadataRequest {

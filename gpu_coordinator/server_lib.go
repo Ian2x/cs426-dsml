@@ -250,7 +250,22 @@ func (s *gpuCoordinatorServer) handleMemcpyHostToDevice(ctx context.Context, req
 
     client := pb.NewGPUDeviceClient(conn)
 
-    // TODO: Actually send data to device
+    // Send data to device
+    data := req.HostSrcData
+
+    chunk := &pb.DataChunk{
+        Data: data[i:end],
+    }
+
+    if err := stream.Send(chunk); err != nil {
+        return nil, err
+    }
+
+    // Close the stream and receive the response
+    resp, err := stream.CloseAndRecv()
+    if err != nil || !resp.Success {
+        return nil, fmt.Errorf("MemcpyHostToDevice failed")
+    }
 
     return &pb.MemcpyResponse{
         Either: &pb.MemcpyResponse_HostToDevice{
@@ -281,12 +296,25 @@ func (s *gpuCoordinatorServer) handleMemcpyDeviceToHost(ctx context.Context, req
 
     client := pb.NewGPUDeviceClient(conn)
 
-    // TODO: Actually retrieve data from device
+    // Retrieve data from device
+    stream, err := client.MemcpyDeviceToHost(context.Background(), &pb.MemcpyDeviceToHostRequest{
+        SrcDeviceId: req.SrcDeviceId
+        SrcMemAddr: req.SrcMemAddr,
+        NumBytes:   req.NumBytes,
+    })
+    if err != nil {
+        return nil, err
+    }
+
+    chunk, err := stream.Recv()
+    if err != nil {
+        return nil, err 
+    }
 
     return &pb.MemcpyResponse{
         Either: &pb.MemcpyResponse_DeviceToHost{
             DeviceToHost: &pb.MemcpyDeviceToHostResponse{
-                DstData: []byte("todo"),
+                DstData: chunk.Data,
             },
         },
     }, nil
