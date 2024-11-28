@@ -13,10 +13,10 @@ import (
     "google.golang.org/grpc"
 )
 
-type DeviceConfig struct {
-    DeviceID  uint64	// json:"deviceId"
-    IPAddress string	// json:"ipAddress"
-    Port      uint64	// json:"port"
+type deviceConfig struct {
+    deviceID  uint64	// json:"deviceId"
+    ipAddress string	// json:"ipAddress"
+    port      uint64	// json:"port"
 }
 
 /*
@@ -24,7 +24,7 @@ type DeviceConfig struct {
 */
 var (
 	deviceID			= flag.Int("device_id", 0, "Unique device ID")
-	configFilePath		= flag.String("config_file", "config.json", "Path to config file")
+	configFile		= flag.String("config_file", "config.json", "Path to config file")
 )
 
 func main() {
@@ -35,31 +35,31 @@ func main() {
     }
 
     // Read config file
-    configData, err := ioutil.ReadFile(*configFilePath)
+    configData, err := ioutil.ReadFile(*configFile)
     if err != nil {
         log.Fatalf("Failed to read config file: %v", err)
     }
 
 	// Parse json to []DeviceConfig
-    var deviceConfigs []DeviceConfig
+    var deviceConfigs []deviceConfig
     err = json.Unmarshal(configData, &deviceConfigs)
     if err != nil {
         log.Fatalf("Failed to parse config file: %v", err)
     }
 
     // Process all the deviceConfigs
-    var ownConfig *DeviceConfig
+    var ownConfig *deviceConfig
     peers := make(map[uint32]*peerInfo)
-    for i, dev := range deviceConfigs {
+    for i, deviceConfig := range deviceConfigs {
         rank := uint32(i)
 
-        if dev.DeviceID == *deviceID {
-            ownConfig = &dev
+        if deviceConfig.deviceID == *deviceID {
+            ownConfig = &deviceConfig
         } else {
             peers[rank] = &peerInfo{
-                deviceID:  dev.DeviceID,
-                ipAddress: dev.IPAddress,
-                port:      dev.Port,
+                deviceID:  deviceConfig.deviceID,
+                ipAddress: deviceConfig.ipAddress,
+                port:      deviceConfig.port,
             }
         }
     }
@@ -69,7 +69,7 @@ func main() {
     }
 
 	// Start the gRPC server
-    lis, err := net.Listen("tcp", fmt.Sprintf(":%d", ownConfig.Port))
+    lis, err := net.Listen("tcp", fmt.Sprintf(":%d", ownConfig.port))
     if err != nil {
         log.Fatalf("Failed to listen: %v", err)
     }
@@ -78,7 +78,7 @@ func main() {
 	
     pb.RegisterGPUDeviceServer(s, sl.MakeGPUDeviceServer(*deviceID, peers))
 
-	log.Printf("GPU Device Server (Device ID: %d) listening at %v", *deviceId, lis.Addr())
+	log.Printf("GPU Device server (device ID: %d) listening at %v", *deviceId, lis.Addr())
 
 	if err := s.Serve(lis); err != nil {
 		log.Fatalf("Failed to serve: %v", err)
