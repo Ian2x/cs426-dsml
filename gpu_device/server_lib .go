@@ -7,6 +7,7 @@ import (
     "sync/atomic"
     "metadata"
     "strconv"
+    "time"
     // "os"
 )
 
@@ -15,7 +16,6 @@ type gpuDeviceServer struct {
     
     // DeviceMetadata
     deviceId        uint64
-    rank            uint32
     minMemAddr      uint64
     maxMemAddr      uint64
 
@@ -23,11 +23,11 @@ type gpuDeviceServer struct {
     memory          []byte
 
     // Other state
-    peers           map[uint32]*peerInfo
-    nextStreamIndex    uint64
-    streams         map[uint64]*streamInfo
-    isHealthy       bool
-    opQueue         chan *operation
+    peers               map[uint32]*peerInfo
+    nextStreamIndex     uint64
+    streams             map[uint64]*streamInfo
+    isHealthy           bool
+    opQueue             chan *operation
 
     // Lock
     mu sync.Mutex
@@ -50,6 +50,25 @@ type streamInfo struct {
     numBytes      uint64
     srcRank       uint64
     dstRank       uint64
+}
+
+func MakeGPUDeviceServer(deviceID uint64, peers map[uint32]*peerInfo) *gpuDeviceServer{
+    server := gpuDeviceServer{
+        deviceId:           deviceID,
+        minMemAddr:         0,
+        maxMemAddr:         1024 * 1024, // 1 MB memory
+        memory:             make([]byte, 1024*1024),
+        peers:              peers, // Read in from config files
+        nextStreamIndex:    1,
+        streams:            make(map[uint64]*streamInfo),
+        isHealthy:          true,
+        opQueue:            make(chan *operation, 100), // Queue up to 100 operations
+    }
+
+    // Start processing operations
+    go server.processOperations()
+
+    return &server
 }
 
 func (s *gpuDeviceServer) GetDeviceMetadata(ctx context.Context, req *pb.GetDeviceMetadataRequest) (*pb.GetDeviceMetadataResponse, error) {
@@ -207,16 +226,33 @@ func (s *gpuDeviceServer) GetStreamStatus(ctx context.Context, req *pb.GetStream
 }
 
 func (s *gpuDeviceServer) processOperations() {
-    // TODO: Handle unhealthy server
-    for op := range s.opQueue {
-        switch op.opType {
-            case "send":
-                go s.handleSendOperation(op.streamID)
-            case "recv":
-                continue // Don't need to do anything
+    for {
+        if !s.isHealthy {
+            log.Printf("Server is unhealthy, stopping processOperations")
+            return
+        }
+
+        select {
+            case op, ok := <-s.opQueue:
+                if !ok {
+                    log.Printf("Operation queue closed, stopping processOperations")
+                    return
+                }
+
+                switch op.opType {
+                    case "send":
+                        s.handleSendOperation(op.streamID)
+                    case "recv":
+                        // No action needed for "recv"
+                        continue
+                }
+
+            default:
+                time.Sleep(10 * time.Millisecond)
         }
     }
 }
+
 
 // client-side GRPC streaming
 func (s *gpuDeviceServer) handleSendOperation(streamID uint64) {
