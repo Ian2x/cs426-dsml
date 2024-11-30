@@ -5,7 +5,7 @@ import (
     "log"
     "time"
 
-    pb "../proto" // Adjust the import path as necessary
+    pb "cs426-dsml/proto" // Adjust the import path as necessary
     "google.golang.org/grpc"
 )
 

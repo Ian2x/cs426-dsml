@@ -8,8 +8,8 @@ import (
     "log"
     "net"
 
-	sl "cs426-dsml/gpu_device/server_lib"
-    pb "../proto"
+	sl "github.com/Ian2x/cs426-dsml/gpu_device/server_lib"
+    pb "github.com/Ian2x/cs426-dsml/proto"
     "google.golang.org/grpc"
 )
 

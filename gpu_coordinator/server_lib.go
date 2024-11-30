@@ -2,7 +2,7 @@ package main
 
 import (
     "context"
-    pb "../proto"
+    pb "github.com/Ian2x/cs426-dsml/proto"
     "sync"
     "errors"
     "fmt"
