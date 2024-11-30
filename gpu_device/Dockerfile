@@ -14,7 +14,7 @@ COPY gpu_device/ .
 COPY proto/ ./proto
 
 # Build
-RUN go build -o gpu_device_server .
+RUN go build -o gpu_device_server ./server
 
 # Port
 EXPOSE 8081

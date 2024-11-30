@@ -8,7 +8,7 @@ import (
     "log"
     "net"
 
-    sl "github.com/Ian2x/cs426-dsml/gpu_coordinator/server_lib"
+    sl "github.com/Ian2x/cs426-dsml/gpu_device/server_lib"
     pb "github.com/Ian2x/cs426-dsml/proto"
     "google.golang.org/grpc"
 )
