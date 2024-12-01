@@ -49,17 +49,16 @@ func main() {
 
     // Process all the deviceConfigs
     var ownConfig *deviceConfig
-    peers := make(map[uint32]*peerInfo)
+    peers := make(map[uint32]*sl.PeerInfo)
     for i, deviceConfig := range deviceConfigs {
         rank := uint32(i)
 
-        if deviceConfig.deviceID == *deviceID {
+        if deviceConfig.deviceID == uint64(*deviceID) {
             ownConfig = &deviceConfig
         } else {
-            peers[rank] = &peerInfo{
-                deviceID:  deviceConfig.deviceID,
-                ipAddress: deviceConfig.ipAddress,
-                port:      deviceConfig.port,
+            peers[rank] = &sl.PeerInfo{
+                IpAddress: deviceConfig.ipAddress,
+                Port:      deviceConfig.port,
             }
         }
     }
@@ -76,9 +75,9 @@ func main() {
 
     s := grpc.NewServer()
 	
-    pb.RegisterGPUDeviceServer(s, sl.MakeGPUDeviceServer(*deviceID, peers))
+    pb.RegisterGPUDeviceServer(s, sl.MakeGPUDeviceServer(uint64(*deviceID), peers))
 
-	log.Printf("GPU Device server (device ID: %d) listening at %v", *deviceId, lis.Addr())
+	log.Printf("GPU Device server (device ID: %d) listening at %v", *deviceID, lis.Addr())
 
 	if err := s.Serve(lis); err != nil {
 		log.Fatalf("Failed to serve: %v", err)

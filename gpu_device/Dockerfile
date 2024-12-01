@@ -1,22 +1,18 @@
 FROM golang:1.23
 
-# Set working directory
 WORKDIR /app
 
-# Copy the shared go.mod and go.sum
-COPY ../go.mod ../go.sum ./
+COPY go.mod go.sum ./
 
-# Download dependencies
 RUN go mod download
 
-# Copy the gpu_device-specific files into container
-COPY gpu_device/ .
-COPY proto/ ./proto
+COPY . .
 
-# Build
+WORKDIR /app/gpu_device
+
 RUN go build -o gpu_device_server ./server
 
-# Port
+# Expose port
 EXPOSE 8081
 
 # Run

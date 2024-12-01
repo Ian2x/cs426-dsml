@@ -4,33 +4,34 @@ import (
     "context"
     pb "github.com/Ian2x/cs426-dsml/proto"
     "sync"
-    "errors"
     "fmt"
     "google.golang.org/grpc"
+    "google.golang.org/grpc/credentials/insecure"
+    "google.golang.org/grpc/metadata"
 )
 
-// gpuCoordinatorServer implements the GPUCoordinator service
-type gpuCoordinatorServer struct {
+// GpuCoordinatorServer implements the GPUCoordinator service
+type GpuCoordinatorServer struct {
     pb.UnimplementedGPUCoordinatorServer
 
     // Devices and Communicators
-    devices        map[uint64]*DeviceConfig       // DeviceID to DeviceConfig
-    rankToDeviceID map[uint32]uint64              // Rank to DeviceID
-    communicators  map[uint64]*communicator       // CommID to Communicator
+    Devices        map[uint64]*DeviceConfig       // DeviceID to DeviceConfig
+    RankToDeviceID map[uint32]uint64              // Rank to DeviceID
+    Communicators  map[uint64]*communicator       // CommID to Communicator
 
     // Other state
-    nextCommID     uint64
+    NextCommID     uint64
 
     // Lock
-    mu             sync.Mutex
+    Mu             sync.Mutex
 }
 
 type DeviceConfig struct {
-    deviceID   uint64
-    ipAddress  string
-    port       uint64
-    minMemAddr uint64
-    maxMemAddr uint64
+    DeviceID   uint64
+    IpAddress  string
+    Port       uint64
+    MinMemAddr uint64
+    MaxMemAddr uint64
 }
 
 type communicator struct {
@@ -46,32 +47,32 @@ type operation struct {
     opReq    interface{}
 }
 
-func MakeGPUCoordinatorServer() *gpuCoordinatorServer{
-    server := gpuCoordinatorServer{
-        devices:        make(map[uint64]*DeviceConfig),
-        rankToDeviceID: make(map[uint32]uint64),
-        communicators:  make(map[uint64]*communicator),
-        nextCommID:     1,
+func MakeGPUCoordinatorServer() *GpuCoordinatorServer{
+    server := GpuCoordinatorServer{
+        Devices:        make(map[uint64]*DeviceConfig),
+        RankToDeviceID: make(map[uint32]uint64),
+        Communicators:  make(map[uint64]*communicator),
+        NextCommID:     1,
     }
 
     return &server
 }
 
-func (s *gpuCoordinatorServer) CommInit(ctx context.Context, req *pb.CommInitRequest) (*pb.CommInitResponse, error) {
-    s.mu.Lock()
-    defer s.mu.Unlock()
+func (s *GpuCoordinatorServer) CommInit(ctx context.Context, req *pb.CommInitRequest) (*pb.CommInitResponse, error) {
+    s.Mu.Lock()
+    defer s.Mu.Unlock()
 
     if req.NumDevices == 0 {
         return nil, fmt.Errorf("Need > 0 devices in comunicator")
     }
 
-    if uint32(len(s.devices)) < req.NumDevices {
+    if uint32(len(s.Devices)) < req.NumDevices {
         return nil, fmt.Errorf("Not enough devices for communicator")
     }
 
     // Get new commID
-    commID := s.nextCommID
-    s.nextCommID++
+    commID := s.NextCommID
+    s.NextCommID++
 
     // Select devices for communicator
     communicator := &communicator{
@@ -84,9 +85,9 @@ func (s *gpuCoordinatorServer) CommInit(ctx context.Context, req *pb.CommInitReq
 
     var devicesMetadata []*pb.DeviceMetadata
     rank := uint32(0)
-    for _, device := range s.devices {
-        // Just need req.numDevices
-        if rank >= req.numDevices {
+    for _, device := range s.Devices {
+        // Just need req.NumDevices
+        if rank >= req.NumDevices {
             break
         }
 
@@ -95,16 +96,16 @@ func (s *gpuCoordinatorServer) CommInit(ctx context.Context, req *pb.CommInitReq
 
         // Add device to devicesMetadata (for response)
         devicesMetadata = append(devicesMetadata, &pb.DeviceMetadata{
-            DeviceId:   &pb.DeviceId{Value: device.deviceID},
-            MinMemAddr: &pb.MemAddr{Value: device.minMemAddr},
-            MaxMemAddr: &pb.MemAddr{Value: device.maxMemAddr},
+            DeviceId:   &pb.DeviceId{Value: device.DeviceID},
+            MinMemAddr: &pb.MemAddr{Value: device.MinMemAddr},
+            MaxMemAddr: &pb.MemAddr{Value: device.MaxMemAddr},
         })
 
-        s.rankToDeviceID[rank] = device.DeviceID
+        s.RankToDeviceID[rank] = device.DeviceID
         rank++
     }
 
-    s.communicators[commID] = communicator
+    s.Communicators[commID] = communicator
 
     return &pb.CommInitResponse{
         Success: true,
@@ -113,11 +114,11 @@ func (s *gpuCoordinatorServer) CommInit(ctx context.Context, req *pb.CommInitReq
     }, nil
 }
 
-func (s *gpuCoordinatorServer) GetCommStatus(ctx context.Context, req *pb.GetCommStatusRequest) (*pb.GetCommStatusResponse, error) {
-    s.mu.Lock()
-    defer s.mu.Unlock()
+func (s *GpuCoordinatorServer) GetCommStatus(ctx context.Context, req *pb.GetCommStatusRequest) (*pb.GetCommStatusResponse, error) {
+    s.Mu.Lock()
+    defer s.Mu.Unlock()
 
-    communicator, exists := s.communicators[req.commID]
+    communicator, exists := s.Communicators[req.CommId]
     if !exists {
         return nil, fmt.Errorf("Communicator %d not found", req.CommId)
     }
@@ -127,11 +128,11 @@ func (s *gpuCoordinatorServer) GetCommStatus(ctx context.Context, req *pb.GetCom
     }, nil
 }
 
-func (s *gpuCoordinatorServer) GroupStart(ctx context.Context, req *pb.GroupStartRequest) (*pb.GroupStartResponse, error) {
-    s.mu.Lock()
-    defer s.mu.Unlock()
+func (s *GpuCoordinatorServer) GroupStart(ctx context.Context, req *pb.GroupStartRequest) (*pb.GroupStartResponse, error) {
+    s.Mu.Lock()
+    defer s.Mu.Unlock()
 
-    communicator, exists := s.communicators[req.CommID]
+    communicator, exists := s.Communicators[req.CommId]
     if !exists {
         return nil, fmt.Errorf("Communicator %d not found", req.CommId)
     }
@@ -147,17 +148,17 @@ func (s *gpuCoordinatorServer) GroupStart(ctx context.Context, req *pb.GroupStar
     }, nil
 }
 
-func (s *gpuCoordinatorServer) GroupEnd(ctx context.Context, req *pb.GroupEndRequest) (*pb.GroupEndResponse, error) {
-    s.mu.Lock()
+func (s *GpuCoordinatorServer) GroupEnd(ctx context.Context, req *pb.GroupEndRequest) (*pb.GroupEndResponse, error) {
+    s.Mu.Lock()
 
-    communicator, exists := s.communicators[req.CommId]
+    communicator, exists := s.Communicators[req.CommId]
     if !exists {
-        s.mu.Unlock()
+        s.Mu.Unlock()
         return nil, fmt.Errorf("Communicator %d not found", req.CommId)
     }
 
     if !communicator.groupStarted {
-        s.mu.Unlock()
+        s.Mu.Unlock()
         return nil, fmt.Errorf("No group operation started")
     }
 
@@ -167,19 +168,19 @@ func (s *gpuCoordinatorServer) GroupEnd(ctx context.Context, req *pb.GroupEndReq
     // Clear opQueue and reset for next group
     communicator.opQueue = nil
     communicator.groupStarted = false
-    s.mu.Unlock()
+    s.Mu.Unlock()
 
     // Execute operations asynchronously
     for _, op := range queuedOps {
         switch op.opType {
             case "AllReduceRing":
                 allReduceRingRequest := op.opReq.(*pb.AllReduceRingRequest)
-                if _, err := s.executeAllReduceRing(req); err != nil {
+                if _, err := s.executeAllReduceRing(allReduceRingRequest); err != nil {
                     return nil, err
                 }
             // Other operations
             default:
-                return nil, fmt.Errorf("Unknown operation type: %v", op.OpType)
+                return nil, fmt.Errorf("Unknown operation type: %v", op.opType)
         }
     }
 
@@ -188,12 +189,12 @@ func (s *gpuCoordinatorServer) GroupEnd(ctx context.Context, req *pb.GroupEndReq
     }, nil
 }
 
-func (s *gpuCoordinatorServer) AllReduceRing(ctx context.Context, req *pb.AllReduceRingRequest) (*pb.AllReduceRingResponse, error) {
-    s.mu.Lock()
+func (s *GpuCoordinatorServer) AllReduceRing(ctx context.Context, req *pb.AllReduceRingRequest) (*pb.AllReduceRingResponse, error) {
+    s.Mu.Lock()
 
-    communicator, exists := s.communicators[req.CommId]
+    communicator, exists := s.Communicators[req.CommId]
     if !exists {
-        s.mu.Unlock()
+        s.Mu.Unlock()
         return nil, fmt.Errorf("Communicator %d not found", req.CommId)
     }
     
@@ -202,9 +203,9 @@ func (s *gpuCoordinatorServer) AllReduceRing(ctx context.Context, req *pb.AllRed
             opType: "AllReduceRing",
             opReq:  req,
         })
-        s.mu.Unlock()
+        s.Mu.Unlock()
     } else { // Else, executed immediately
-        s.mu.Unlock()
+        s.Mu.Unlock()
         if _, err := s.executeAllReduceRing(req); err != nil {
             return nil, err
         }
@@ -215,11 +216,12 @@ func (s *gpuCoordinatorServer) AllReduceRing(ctx context.Context, req *pb.AllRed
     }, nil
 }
 
-func (s *gpuCoordinatorServer) executeAllReduceRing(req *pb.AllReduceRingRequest) (*pb.AllReduceRingResponse, error) {
+func (s *GpuCoordinatorServer) executeAllReduceRing(req *pb.AllReduceRingRequest) (*pb.AllReduceRingResponse, error) {
     // TODO (may need to change parameters and return types)
+    return nil, nil
 }
 
-func (s *gpuCoordinatorServer) Memcpy(ctx context.Context, req *pb.MemcpyRequest) (*pb.MemcpyResponse, error) {
+func (s *GpuCoordinatorServer) Memcpy(ctx context.Context, req *pb.MemcpyRequest) (*pb.MemcpyResponse, error) {
     switch op := req.Either.(type) {
         case *pb.MemcpyRequest_HostToDevice:
             return s.handleMemcpyHostToDevice(ctx, op.HostToDevice)
@@ -230,19 +232,19 @@ func (s *gpuCoordinatorServer) Memcpy(ctx context.Context, req *pb.MemcpyRequest
     }
 }
 
-func (s *gpuCoordinatorServer) handleMemcpyHostToDevice(ctx context.Context, req *pb.MemcpyHostToDeviceRequest) (*pb.MemcpyResponse, error) {
-    s.mu.Lock()
-    deviceInfo, exists := s.devices[req.DstDeviceId.Value]
+func (s *GpuCoordinatorServer) handleMemcpyHostToDevice(ctx context.Context, req *pb.MemcpyHostToDeviceRequest) (*pb.MemcpyResponse, error) {
+    s.Mu.Lock()
+    deviceInfo, exists := s.Devices[req.DstDeviceId.Value]
     if !exists {
-        s.mu.Unlock()
+        s.Mu.Unlock()
         return nil, fmt.Errorf("Destination device not found")
     }
-    s.mu.Unlock()
+    s.Mu.Unlock()
 
     // Connect to destination device
     var opts []grpc.DialOption
 	opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
-    conn, err := grpc.NewClient(fmt.Sprintf("%s:%d", deviceInfo.ipAddress, deviceInfo.port), opts...)
+    conn, err := grpc.NewClient(fmt.Sprintf("%s:%d", deviceInfo.IpAddress, deviceInfo.Port), opts...)
     if err != nil {
         return nil, err
     }
@@ -250,11 +252,19 @@ func (s *gpuCoordinatorServer) handleMemcpyHostToDevice(ctx context.Context, req
 
     client := pb.NewGPUDeviceClient(conn)
 
+    // Add dstMemAddr to context
+    md := metadata.Pairs("dstmemaddr", fmt.Sprintf("%d", req.DstMemAddr.Value))
+
+    stream, err := client.MemcpyHostToDevice(metadata.NewOutgoingContext(ctx, md))
+    if err != nil {
+        return nil, err
+    }
+
     // Send data to device
     data := req.HostSrcData
 
     chunk := &pb.DataChunk{
-        Data: data[i:end],
+        Data: data,
     }
 
     if err := stream.Send(chunk); err != nil {
@@ -276,19 +286,19 @@ func (s *gpuCoordinatorServer) handleMemcpyHostToDevice(ctx context.Context, req
     }, nil
 }
 
-func (s *gpuCoordinatorServer) handleMemcpyDeviceToHost(ctx context.Context, req *pb.MemcpyDeviceToHostRequest) (*pb.MemcpyResponse, error) {
-    s.mu.Lock()
-    deviceInfo, exists := s.devices[req.SrcDeviceId.Value]
+func (s *GpuCoordinatorServer) handleMemcpyDeviceToHost(ctx context.Context, req *pb.MemcpyDeviceToHostRequest) (*pb.MemcpyResponse, error) {
+    s.Mu.Lock()
+    deviceInfo, exists := s.Devices[req.SrcDeviceId.Value]
     if !exists {
-        s.mu.Unlock()
+        s.Mu.Unlock()
         return nil, fmt.Errorf("Source device not found")
     }
-    s.mu.Unlock()
+    s.Mu.Unlock()
 
     // Connect to source device
     var opts []grpc.DialOption
 	opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
-    conn, err := grpc.NewClient(fmt.Sprintf("%s:%d", deviceInfo.ipAddress, deviceInfo.port), opts...)
+    conn, err := grpc.NewClient(fmt.Sprintf("%s:%d", deviceInfo.IpAddress, deviceInfo.Port), opts...)
     if err != nil {
         return nil, err
     }
@@ -298,7 +308,7 @@ func (s *gpuCoordinatorServer) handleMemcpyDeviceToHost(ctx context.Context, req
 
     // Retrieve data from device
     stream, err := client.MemcpyDeviceToHost(context.Background(), &pb.MemcpyDeviceToHostRequest{
-        SrcDeviceId: req.SrcDeviceId
+        SrcDeviceId: req.SrcDeviceId,
         SrcMemAddr: req.SrcMemAddr,
         NumBytes:   req.NumBytes,
     })

@@ -8,7 +8,7 @@ import (
     "log"
     "net"
 
-    sl "github.com/Ian2x/cs426-dsml/gpu_device/server_lib"
+    sl "github.com/Ian2x/cs426-dsml/gpu_coordinator/server_lib"
     pb "github.com/Ian2x/cs426-dsml/proto"
     "google.golang.org/grpc"
 )
@@ -28,7 +28,7 @@ func main() {
     }
 
     // Parse json to []DeviceConfig
-    var deviceConfigs []DeviceConfig // Initialized with 
+    var deviceConfigs []sl.DeviceConfig // Initialized with 
     err = json.Unmarshal(configData, &deviceConfigs)
     if err != nil {
         log.Fatalf("Failed to parse config file: %v", err)
@@ -40,11 +40,11 @@ func main() {
     // Process all the deviceConfigs
     for i, deviceConfig := range deviceConfigs {
         rank := uint32(i)
-        deviceConfig.minMemAddr = 0
-        deviceConfig.maxMemAddr = 1024 * 1024 // 1 MB memory
+        deviceConfig.MinMemAddr = 0
+        deviceConfig.MaxMemAddr = 1024 * 1024 // 1 MB memory
 
-        gpuCoordinatorServer.devices[deviceConfig.deviceID] = &deviceConfig
-        gpuCoordinatorServer.rankToDeviceID[rank] = deviceConfig.deviceID
+        gpuCoordinatorServer.Devices[deviceConfig.DeviceID] = &deviceConfig
+        gpuCoordinatorServer.RankToDeviceID[rank] = deviceConfig.DeviceID
     }
 
     // Start the gRPC server

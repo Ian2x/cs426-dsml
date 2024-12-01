@@ -6,7 +6,7 @@ build_device:
 	docker build -t gpu_device -f gpu_device/Dockerfile .
 
 build_coordinator:
-	docker build -t gpu_coordinator ./gpu_coordinator
+	docker build -t gpu_coordinator -f gpu_coordinator/Dockerfile .
 
 build_client:
 	go build -o client_app/client_app ./client_app

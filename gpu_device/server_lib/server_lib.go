@@ -4,10 +4,13 @@ import (
     "context"
     pb "github.com/Ian2x/cs426-dsml/proto"
     "sync"
-    "sync/atomic"
     "google.golang.org/grpc/metadata"
     "strconv"
     "time"
+    "fmt"
+    "log"
+    "google.golang.org/grpc"
+    "google.golang.org/grpc/credentials/insecure"
     // "os"
 )
 
@@ -23,7 +26,7 @@ type gpuDeviceServer struct {
     memory          []byte
 
     // Other state
-    peers               map[uint32]*peerInfo
+    peers               map[uint32]*PeerInfo
     nextStreamIndex     uint64
     streams             map[uint64]*streamInfo
     isHealthy           bool
@@ -38,9 +41,9 @@ type operation struct {
     streamID    uint64
 }
 
-type peerInfo struct {
-    ipAddress  string
-    port       uint64
+type PeerInfo struct {
+    IpAddress  string
+    Port       uint64
 }
 
 type streamInfo struct {
@@ -48,11 +51,11 @@ type streamInfo struct {
     sendBuffAddr  uint64
     recvBuffAddr  uint64
     numBytes      uint64
-    srcRank       uint64
-    dstRank       uint64
+    srcRank       uint32
+    dstRank       uint32
 }
 
-func MakeGPUDeviceServer(deviceID uint64, peers map[uint32]*peerInfo) *gpuDeviceServer{
+func MakeGPUDeviceServer(deviceID uint64, peers map[uint32]*PeerInfo) *gpuDeviceServer{
     server := gpuDeviceServer{
         deviceId:           deviceID,
         minMemAddr:         0,
@@ -97,11 +100,11 @@ func (s *gpuDeviceServer) BeginSend(ctx context.Context, req *pb.BeginSendReques
     }
 
     // Get new streamID
-    streamID := (s.deviceID << 32) | s.nextStreamIndex // Kinda rough
+    streamID := (s.deviceId << 32) | s.nextStreamIndex // Kinda rough
     s.nextStreamIndex++
 
     // Store & add streamInfo
-    s.streams[streamId] = &streamInfo{
+    s.streams[streamID] = &streamInfo{
         status: pb.Status_IN_PROGRESS,
         sendBuffAddr: req.SendBuffAddr.Value,
         numBytes: req.NumBytes,
@@ -118,7 +121,7 @@ func (s *gpuDeviceServer) BeginSend(ctx context.Context, req *pb.BeginSendReques
     // Return BeginSendResponse
     return &pb.BeginSendResponse{
         Initiated: true,
-        StreamId:  &pb.StreamId{Value: streamId},
+        StreamId:  &pb.StreamId{Value: streamID},
     }, nil
 }
 
@@ -141,7 +144,7 @@ func (s *gpuDeviceServer) BeginReceive(ctx context.Context, req *pb.BeginReceive
     // Queue the operation
     op := &operation{
         opType: "recv",
-        streamID: streamID,
+        streamID: req.StreamId.Value,
     }
     s.opQueue <- op
 
@@ -177,7 +180,7 @@ func (s *gpuDeviceServer) StreamSend(stream pb.GPUDevice_StreamSendServer) error
     message, err := stream.Recv()
     if err != nil {
         s.mu.Lock()
-        s.streams[streamID] = pb.Status_FAILED
+        s.streams[streamID].status = pb.Status_FAILED
         s.mu.Unlock()
         return fmt.Errorf("Failed to receive stream: %v", err)
     }
@@ -188,7 +191,7 @@ func (s *gpuDeviceServer) StreamSend(stream pb.GPUDevice_StreamSendServer) error
     // Check size of received data
     if dataLen != streamInfo.numBytes {
         s.mu.Lock()
-        s.streams[streamID] = pb.Status_FAILED
+        s.streams[streamID].status = pb.Status_FAILED
         s.mu.Unlock()
         return fmt.Errorf("Expected %d bytes, received %d bytes", streamInfo.numBytes, dataLen)
     }
@@ -198,11 +201,11 @@ func (s *gpuDeviceServer) StreamSend(stream pb.GPUDevice_StreamSendServer) error
     defer s.mu.Unlock()
     memAddr := streamInfo.recvBuffAddr - s.minMemAddr
     if memAddr < 0 || memAddr+dataLen > uint64(len(s.memory)) {
-        s.streams[streamID] = pb.Status_FAILED
-        return errors.New("Memory write out of bounds")
+        s.streams[streamID].status = pb.Status_FAILED
+        return fmt.Errorf("Memory write out of bounds")
     }
     copy(s.memory[memAddr:memAddr+dataLen], data)
-    s.streams[streamID] = pb.Status_SUCCESS
+    s.streams[streamID].status = pb.Status_SUCCESS
 
     return stream.SendAndClose(&pb.StreamSendResponse{Success: true})
 }
@@ -328,18 +331,18 @@ func (s *gpuDeviceServer) handleSendOperation(streamID uint64) {
         return
     }
 
-    // Get destination peerInfo
+    // Get destination PeerInfo
     dstPeer, exists := s.peers[streamInfo.dstRank]
     if !exists {
         log.Printf("Destination rank %d not found", streamInfo.dstRank)
         s.mu.Lock()
-        s.streams[streamID] = pb.Status_FAILED
+        s.streams[streamID].status = pb.Status_FAILED
         s.mu.Unlock()
         return
     }
 
     // Get address of dstPeer
-    dstAddress := fmt.Sprintf("%s:%d", dstPeer.ipAddress, dstPeer.port)
+    dstAddress := fmt.Sprintf("%s:%d", dstPeer.IpAddress, dstPeer.Port)
 
     // Create a gRPC client to dstAddress
     var opts []grpc.DialOption
@@ -348,7 +351,7 @@ func (s *gpuDeviceServer) handleSendOperation(streamID uint64) {
     if err != nil {
         log.Printf("Failed to connect: %v", err)
         s.mu.Lock()
-        s.streams[streamID] = pb.Status_FAILED
+        s.streams[streamID].status = pb.Status_FAILED
         s.mu.Unlock()
         return
     }
@@ -356,14 +359,14 @@ func (s *gpuDeviceServer) handleSendOperation(streamID uint64) {
 
     client := pb.NewGPUDeviceClient(conn)
 
-    // Store streamId in context
+    // Store streamID in context
     md := metadata.Pairs("streamid", fmt.Sprintf("%d", streamID))
     ctx := metadata.NewOutgoingContext(context.Background(), md)
     stream, err := client.StreamSend(ctx)
     if err != nil {
         log.Printf("Failed to StreamSend on receiving end: %v", err)
         s.mu.Lock()
-        s.streams[streamID] = pb.Status_FAILED
+        s.streams[streamID].status = pb.Status_FAILED
         s.mu.Unlock()
         return
     }
@@ -373,7 +376,7 @@ func (s *gpuDeviceServer) handleSendOperation(streamID uint64) {
     memAddr := streamInfo.sendBuffAddr - s.minMemAddr
     if memAddr+streamInfo.numBytes > uint64(len(s.memory)) {
         log.Printf("Memory read out of bounds")
-        s.streams[streamID] = pb.Status_FAILED
+        s.streams[streamID].status = pb.Status_FAILED
         s.mu.Unlock()
         return
     }
@@ -387,7 +390,7 @@ func (s *gpuDeviceServer) handleSendOperation(streamID uint64) {
     if err := stream.Send(chunk); err != nil {
         log.Printf("Failed to send data chunk: %v", err)
         s.mu.Lock()
-        s.streams[streamID] = pb.Status_FAILED
+        s.streams[streamID].status = pb.Status_FAILED
         s.mu.Unlock()
         return
     }
@@ -397,12 +400,12 @@ func (s *gpuDeviceServer) handleSendOperation(streamID uint64) {
     if err != nil || !resp.Success {
         log.Printf("StreamSend failed: %v", err)
         s.mu.Lock()
-        s.streams[streamID] = pb.Status_FAILED
+        s.streams[streamID].status = pb.Status_FAILED
         s.mu.Unlock()
         return
     }
 
     s.mu.Lock()
-    s.streams[streamID] = pb.Status_SUCCESS
+    s.streams[streamID].status = pb.Status_SUCCESS
     s.mu.Unlock()
 }
