@@ -218,6 +218,19 @@ func (s *GpuCoordinatorServer) AllReduceRing(ctx context.Context, req *pb.AllRed
 
 func (s *GpuCoordinatorServer) executeAllReduceRing(req *pb.AllReduceRingRequest) (*pb.AllReduceRingResponse, error) {
     // TODO (may need to change parameters and return types)
+    // for _ in num_devices (share-reduce)
+        // for i in num_devices
+            // begin send i
+            // begin receive i+1
+        // keep checking stream status for all devices
+        // once all devices are done, continue
+    // for _ in num_devices (share-only)
+        // for i in num_devices
+            // begin send i
+            // begin receive i+1
+        // keep checking stream status for all devices
+        // once all devices are done, continue
+    
     return nil, nil
 }
 
