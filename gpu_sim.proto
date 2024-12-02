@@ -59,6 +59,7 @@ message BeginSendRequest {
   MemAddr sendBuffAddr = 1;
   uint64 numBytes = 2;
   Rank dstRank = 3;
+  ReduceOp receiveOp = 4; // WE ADDED
 }
 
 message BeginSendResponse {
@@ -164,6 +165,7 @@ enum ReduceOp {
   MIN = 2;
   MAX = 3;
   // AVG = 4;
+  WRITE = 63; // WE ADDED
 }
 
 message AllReduceRingRequest {
