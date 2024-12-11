@@ -174,8 +174,6 @@ message AllReduceRingRequest {
   ReduceOp op = 3;
   // Rank -> MemAddr; protobuf doesn't support message type keys or type aliases
   map<uint32, MemAddr> memAddrs = 4;
-  // Added by Josh
-  uint64 numBytes = 5;
 }
 
 message AllReduceRingResponse {
