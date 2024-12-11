@@ -11,6 +11,9 @@ import (
     "log"
     "google.golang.org/grpc"
     "google.golang.org/grpc/credentials/insecure"
+
+    utl "github.com/Ian2x/cs426-dsml/util"
+
     // "os"
 )
 
@@ -38,6 +41,7 @@ type gpuDeviceServer struct {
 
 type operation struct {
     opType      string // "send" or "recv"
+    reduceOp    pb.ReduceOp
     streamID    uint64
 }
 
@@ -114,6 +118,7 @@ func (s *gpuDeviceServer) BeginSend(ctx context.Context, req *pb.BeginSendReques
     // Queue the operation
     op := &operation{
         opType: "send",
+        reduceOp: req.ReceiveOp
         streamID: streamID,
     }
     s.opQueue <- op
@@ -144,6 +149,7 @@ func (s *gpuDeviceServer) BeginReceive(ctx context.Context, req *pb.BeginReceive
     // Queue the operation
     op := &operation{
         opType: "recv",
+        reduceOp: nil, // will get reduceOp in StreamSend from the context
         streamID: req.StreamId.Value,
     }
     s.opQueue <- op
@@ -160,6 +166,8 @@ func (s *gpuDeviceServer) StreamSend(stream pb.GPUDevice_StreamSendServer) error
     if !ok {
         return fmt.Errorf("Missing StreamSend metadata")
     }
+
+    // get streamID metadata
     streamIDs := md.Get("streamid")
     if len(streamIDs) == 0 {
         return fmt.Errorf("Missing streamid from StreamSend metadata")
@@ -168,7 +176,15 @@ func (s *gpuDeviceServer) StreamSend(stream pb.GPUDevice_StreamSendServer) error
     if err != nil {
         return fmt.Errorf("Invalid streamID from StreamSend metadata")
     }
+    
+    // get reduceOp metadata
+    reduceOps := md.Get("reduceop")
+    if len(reduceOps) == 0 {
+        return fmt.Errorf("Missing reduceop from StreamSend metadata")
+    }
+    reduceOpStr := reduceOps[0]
 
+    // Get streamInfo corresponding to streamID
     s.mu.Lock()
     streamInfo, exists := s.streams[streamID]
     s.mu.Unlock()
@@ -196,7 +212,7 @@ func (s *gpuDeviceServer) StreamSend(stream pb.GPUDevice_StreamSendServer) error
         return fmt.Errorf("Expected %d bytes, received %d bytes", streamInfo.numBytes, dataLen)
     }
 
-    // Write data to memory and send response
+    // Check memory memory bounds
     s.mu.Lock()
     defer s.mu.Unlock()
     memAddr := streamInfo.recvBuffAddr - s.minMemAddr
@@ -204,7 +220,26 @@ func (s *gpuDeviceServer) StreamSend(stream pb.GPUDevice_StreamSendServer) error
         s.streams[streamID].status = pb.Status_FAILED
         return fmt.Errorf("Memory write out of bounds")
     }
-    copy(s.memory[memAddr:memAddr+dataLen], data)
+
+    // Write data to memory (with correct reduceOp) and send response
+    dstData = utl.ByteArrayToFloat64Slice(s.memory[memAddr:memAddr+dataLen])
+    srcData = utl.ByteArrayToFloat64Slice(data)
+    var newData []float64
+    switch reduceOpStr {
+        case "SUM":
+            newData = utl.AddFloat64Slices(dstData, srcData)
+        case "PROD":
+            newData = utl.MultiplyFloat64Slices(dstData, srcData)
+        case "MIN":
+            newData = utl.MinFloat64Slices(dstData, srcData)
+        case "MAX":
+            newData = utl.MaxFloat64Slices(dstData, srcData)
+        case "WRITE":
+            newData = srcData
+        default:
+            return fmt.Errorf("Invalid reduceop from StreamSend metadata: %s", reduceOpStr)
+    }
+    copy(s.memory[memAddr:memAddr+dataLen], newData)
     s.streams[streamID].status = pb.Status_SUCCESS
 
     return stream.SendAndClose(&pb.StreamSendResponse{Success: true})
@@ -308,7 +343,7 @@ func (s *gpuDeviceServer) processOperations() {
 
                 switch op.opType {
                     case "send":
-                        s.handleSendOperation(op.streamID)
+                        s.handleSendOperation(op.streamID, op.reduceOp)
                     case "recv":
                         // No action needed for "recv"
                         continue
@@ -322,7 +357,7 @@ func (s *gpuDeviceServer) processOperations() {
 
 
 // client-side GRPC streaming
-func (s *gpuDeviceServer) handleSendOperation(streamID uint64) {
+func (s *gpuDeviceServer) handleSendOperation(streamID uint64, reduceOp pb.ReduceOp) {
     s.mu.Lock()
     streamInfo, exists := s.streams[streamID]
     s.mu.Unlock()
@@ -360,7 +395,10 @@ func (s *gpuDeviceServer) handleSendOperation(streamID uint64) {
     client := pb.NewGPUDeviceClient(conn)
 
     // Store streamID in context
-    md := metadata.Pairs("streamid", fmt.Sprintf("%d", streamID))
+    md := metadata.Pairs(
+        "streamid", fmt.Sprintf("%d", streamID),
+        "reduceop", reduceOp.String()
+    )
     ctx := metadata.NewOutgoingContext(context.Background(), md)
     stream, err := client.StreamSend(ctx)
     if err != nil {
