@@ -3,6 +3,7 @@ package util
 import (
     "encoding/binary"
     "math"
+    "fmt"
 )
 
 // Float64SliceToByteArray converts a slice of float64 to a byte array

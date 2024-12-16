@@ -7,6 +7,8 @@ import (
 
     pb "cs426-dsml/proto" // Adjust the import path as necessary
     "google.golang.org/grpc"
+
+    // utl "github.com/Ian2x/cs426-dsml/util"
 )
 
 func main() {
@@ -130,16 +132,4 @@ func main() {
 
     // Free any resources etc.
     // Implement CommDestroy if necessary
-}
-
-// Float64SliceToByteArray converts a slice of float64 to a byte array
-func Float64SliceToByteArray(floats []float64) []byte {
-    // Implement conversion
-    return []byte{}
-}
-
-// ByteArrayToFloat64Slice converts a byte array to a slice of float64
-func ByteArrayToFloat64Slice(data []byte) []float64 {
-    // Implement conversion
-    return []float64{}
 }

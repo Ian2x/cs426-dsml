@@ -8,6 +8,10 @@ import (
     "google.golang.org/grpc"
     "google.golang.org/grpc/credentials/insecure"
     "google.golang.org/grpc/metadata"
+    "time"
+    "log"
+
+    // utl "github.com/Ian2x/cs426-dsml/util"
 )
 
 // GpuCoordinatorServer implements the GPUCoordinator service
@@ -40,8 +44,6 @@ type communicator struct {
     groupStarted bool
     opQueue      []operation
     status       pb.Status
-    // ADDED conns
-    conns        map[uint32]*grpc.ClientConn // Rank to ClientConn
 }
 
 type operation struct {
@@ -81,9 +83,8 @@ func (s *GpuCoordinatorServer) CommInit(ctx context.Context, req *pb.CommInitReq
         commID:  commID,
         devices: make(map[uint32]*DeviceConfig),
         groupStarted: false,
-        opQueue: make([]operation, req.NumDevices * 100),
+        opQueue: make([]operation, 0, req.NumDevices * 100),
         status: pb.Status_IN_PROGRESS,
-        conns: make(map[uint32]*grpc.ClientConn),
     }
 
     var devicesMetadata []*pb.DeviceMetadata
@@ -103,18 +104,6 @@ func (s *GpuCoordinatorServer) CommInit(ctx context.Context, req *pb.CommInitReq
             MinMemAddr: &pb.MemAddr{Value: device.MinMemAddr},
             MaxMemAddr: &pb.MemAddr{Value: device.MaxMemAddr},
         })
-
-        // establish connection (coordinator -> device)
-        // store conn within Communicator
-        var opts []grpc.DialOption
-        opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
-        conn, err := grpc.NewClient(
-            fmt.Sprintf("%s:%d", device.IpAddress, device.Port), opts...
-        )
-        if err != nil {
-            log.Fatalf("Failed to connect: %v", err)
-        }
-        communicator.conns[rank] = conn
 
         s.RankToDeviceID[rank] = device.DeviceID
         rank++
@@ -186,18 +175,44 @@ func (s *GpuCoordinatorServer) GroupEnd(ctx context.Context, req *pb.GroupEndReq
     s.Mu.Unlock()
 
     // Execute operations asynchronously
+    var wg sync.WaitGroup
+    errCh := make(chan error, len(queuedOps))
+
     for _, op := range queuedOps {
-        switch op.opType {
-            case "AllReduceRing":
-                allReduceRingRequest := op.opReq.(*pb.AllReduceRingRequest)
-                if _, err := s.executeAllReduceRing(allReduceRingRequest); err != nil {
-                    return nil, err
-                }
-            // Other operations
-            default:
-                return nil, fmt.Errorf("Unknown operation type: %v", op.opType)
+        wg.Add(1)
+        go func(op operation) {
+            defer wg.Done()
+
+            switch op.opType {
+                case "AllReduceRing":
+                    allReduceRingRequest := op.opReq.(*pb.AllReduceRingRequest)
+                    if err := s.executeAllReduceRing(allReduceRingRequest); err != nil {
+                        errCh <- err
+                    }
+                // Other operations
+                default:
+                    errCh <- fmt.Errorf("Unknown operation type: %v", op.opType)
+            }
+        }(op)
+    }
+
+    go func() {
+        wg.Wait()
+        close(errCh)
+    }()
+
+    for err := range errCh {
+        if err != nil {
+            s.Mu.Lock()
+            communicator.status = pb.Status_FAILED
+            s.Mu.Unlock()
+            return nil, err
         }
     }
+
+    s.Mu.Lock()
+    communicator.status = pb.Status_SUCCESS
+    s.Mu.Unlock()
 
     return &pb.GroupEndResponse{
         Success: true,
@@ -233,13 +248,13 @@ func (s *GpuCoordinatorServer) AllReduceRing(ctx context.Context, req *pb.AllRed
 
 // invokes beginSend, beginReceive, and blocks until
 // getStreamStatus returns SUCCESS or FAILED.
-func (s *GPUCoordinatorServer) beginShare(
-    srcRank int,
+func (s *GpuCoordinatorServer) beginShare(
+    srcRank uint32,
     srcBuffAddr uint64,
-    dstRank int,
+    dstRank uint32,
     dstBuffAddr uint64,
-    bytesPerReq int,
-    clients map[uint32]GPUDeviceClient,
+    bytesPerReq uint64,
+    clients map[uint32]pb.GPUDeviceClient,
     op pb.ReduceOp,
     errCh chan error,
     wg *sync.WaitGroup,
@@ -252,9 +267,9 @@ func (s *GPUCoordinatorServer) beginShare(
     beginSendResp, beginSendErr := clients[srcRank].BeginSend(
         ctx,
         &pb.BeginSendRequest{
-            SendBuffAddr: sendBuffAddr,
+            SendBuffAddr: &pb.MemAddr{Value: srcBuffAddr},
             NumBytes: bytesPerReq,
-            DstRank: dstRank,
+            DstRank: &pb.Rank{Value: dstRank},
             ReceiveOp: op,
         },
     )
@@ -265,15 +280,17 @@ func (s *GPUCoordinatorServer) beginShare(
     }
     if !beginSendResp.Initiated {
         // handle error
+        errCh <- fmt.Errorf("BeginSend not initiated on rank=%d", srcRank)
+        return
     }
     // invoke beginReceive
     beginRecvResp, beginRecvErr := clients[dstRank].BeginReceive(
         ctx,
         &pb.BeginReceiveRequest{
             StreamId: beginSendResp.StreamId,
-            RecvBuffAddr: recvBuffAddr,
+            RecvBuffAddr: &pb.MemAddr{Value: dstBuffAddr},
             NumBytes: bytesPerReq,
-            SrcRank: srcRank,
+            SrcRank: &pb.Rank{Value: srcRank},
         },
     )
     if beginRecvErr != nil {
@@ -283,6 +300,8 @@ func (s *GPUCoordinatorServer) beginShare(
     }
     if !beginRecvResp.Initiated {
         // handle error
+        errCh <- fmt.Errorf("BeginReceive not initiated on rank=%d", dstRank)
+        return
     }
     // check stream status
     for {
@@ -296,15 +315,19 @@ func (s *GPUCoordinatorServer) beginShare(
         )
         if getStatusErr != nil {
             // not sure how to handle error here. maybe just resend?
+            log.Printf("GetStreamStatus error on rank=%d: %v", srcRank, getStatusErr)
+            errCh <- getStatusErr
+            return
         }
         switch getStatusResp.Status {
-        case SUCCESS:
+        case pb.Status_SUCCESS:
             return
-        case FAILED:
+        case pb.Status_FAILED:
             // handle error
             // errCh <- (some error)
+            errCh <- fmt.Errorf("stream status FAILED on rank=%d", srcRank)
             return
-        case IN_PROGRESS:
+        case pb.Status_IN_PROGRESS:
             // sleep and retry
             time.Sleep(100 * time.Millisecond)
         }
@@ -312,56 +335,81 @@ func (s *GPUCoordinatorServer) beginShare(
 }
 
 func (s *GpuCoordinatorServer) executeAllReduceRing(req *pb.AllReduceRingRequest) error {
-    // request fields
-    commId := req.CommId
-    numBytes := req.Count
-    op := req.Op
-    memAddrs := req.MemAddrs
-
     // get the communicator and number of devices
     s.Mu.Lock()
-    communicator := s.Communicators[commId]
-    numDevices := len(communicator.devices)
-    // initialize GPUDeviceClients
-    clients := make(map[uint32]GPUDeviceClient)
-    for rank := range numDevices {
-        clients[rank] = pb.NewGPUDeviceClient(communicator.conns[rank])
+    communicator := s.Communicators[req.CommId]
+    if communicator == nil {
+        s.Mu.Unlock()
+        return fmt.Errorf("Communicator %d not found", req.CommId)
+    }
+    deviceClients := make(map[uint32]pb.GPUDeviceClient)
+    conns := make(map[uint32]*grpc.ClientConn)
+    numDevices := uint32(len(communicator.devices))
+
+    opts := []grpc.DialOption{
+        grpc.WithTransportCredentials(insecure.NewCredentials()),
+    }
+
+    for rank, deviceConfig := range communicator.devices {
+        target := fmt.Sprintf("%s:%d", deviceConfig.IpAddress, deviceConfig.Port)
+        conn, err := grpc.NewClient(target, opts...)
+        if err != nil {
+            s.Mu.Unlock()
+            return fmt.Errorf("could not create gRPC client for rank=%d device=%d: %v", rank, deviceConfig.DeviceID, err)
+        }
+        conns[rank] = conn
+        deviceClients[rank] = pb.NewGPUDeviceClient(conn)
     }
     s.Mu.Unlock()
 
-    errCh := make(chan error, numDevices)
-    bytesPerReq := numBytes / numDevices
+    // Close connections
+    defer func() {
+        for _, c := range conns {
+            c.Close()
+        }
+    }()
+
+    // request fields
+    numBytes := req.Count
+    op := req.Op
+    memAddrs := req.MemAddrs
+    bytesPerReq := numBytes / uint64(numDevices)
+
+    // Error channel for both phases
+    errCh := make(chan error, 2 * numDevices)
     
     // begin allReduceRing
     for phase := range 2 {
+        var reduceOp pb.ReduceOp
         if phase == 0 {
             // share-reduce phase
-            reduceOp := op
+            reduceOp = op
         } else {
             // share-only phase
-            reduceOp := pb.ReduceOp_WRITE
+            reduceOp = pb.ReduceOp_WRITE
         }
-        for i := range (numDevices - 1) {
+
+        for i := uint32(0); i < numDevices - 1; i++ {
             // initialize wait group
             var wg sync.WaitGroup
             // node i sends, node i + 1 receives
-            s.Mu.Lock()
-            for rank := range numDevices {
-                srcRank := rank % numDevices
-                dstRank := (rank + 1) % numDevices
+            // s.Mu.Lock()
+            for rank := uint32(0); rank < numDevices; rank++ {
+                srcRank := uint32(rank % numDevices)
+                dstRank := uint32((rank + 1) % numDevices)
                 // calculate addrs for send and receive
-                srcBuffAddr := uint64(memAddrs[srcRank] + (bytesPerReq * (srcRank - i)) % numBytes)
-                dstBuffAddr := uint64(memAddrs[dstRank] + (bytesPerReq * (dstRank - i + numDevices - 1)) % numBytes)
+                srcBuffAddr := uint64(memAddrs[srcRank].Value + (bytesPerReq * uint64(srcRank - i)) % numBytes)
+                dstBuffAddr := uint64(memAddrs[dstRank].Value + (bytesPerReq * uint64(dstRank - i + numDevices - 1)) % numBytes)
                 // invoke beginShare
+                wg.Add(1)
                 go s.beginShare(
                     srcRank, srcBuffAddr,
                     dstRank, dstBuffAddr,
-                    bytesPerReq, clients,
+                    bytesPerReq, deviceClients,
                     reduceOp, errCh, &wg,
                 )
-                wg.Add(1)
             }
-            s.Mu.Unlock()
+            // s.Mu.Unlock()
             // wait for all shares to finish
             wg.Wait()
             // empty error channel and read errors
@@ -369,8 +417,10 @@ func (s *GpuCoordinatorServer) executeAllReduceRing(req *pb.AllReduceRingRequest
                 select {
                 case err := <-errCh:
                     // process error
+                    log.Printf("Error in executeAllReduceRing: %v", err)
                 default:
                     break
+                }
             }
         }
     }

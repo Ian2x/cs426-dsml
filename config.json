@@ -1,15 +1,24 @@
 {
-    "devices": [
-      {
-        "deviceId": 1,
-        "ipAddress": "localhost",
-        "port": 9001
-      },
-      {
-        "deviceId": 2,
-        "ipAddress": "localhost",
-        "port": 9002
-      }
-    ]
-  }
-  
+  "devices": [
+    {
+      "deviceId": 1,
+      "ipAddress": "localhost",
+      "port": 9001
+    },
+    {
+      "deviceId": 2,
+      "ipAddress": "localhost",
+      "port": 9002
+    },
+    {
+      "deviceId": 3,
+      "ipAddress": "localhost",
+      "port": 9003
+    },
+    {
+      "deviceId": 4,
+      "ipAddress": "localhost",
+      "port": 9004
+    }
+  ]
+}

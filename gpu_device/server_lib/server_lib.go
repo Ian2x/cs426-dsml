@@ -118,7 +118,7 @@ func (s *gpuDeviceServer) BeginSend(ctx context.Context, req *pb.BeginSendReques
     // Queue the operation
     op := &operation{
         opType: "send",
-        reduceOp: req.ReceiveOp
+        reduceOp: req.ReceiveOp,
         streamID: streamID,
     }
     s.opQueue <- op
@@ -149,7 +149,7 @@ func (s *gpuDeviceServer) BeginReceive(ctx context.Context, req *pb.BeginReceive
     // Queue the operation
     op := &operation{
         opType: "recv",
-        reduceOp: nil, // will get reduceOp in StreamSend from the context
+        // reduceOp: nil, // will get reduceOp in StreamSend from the context
         streamID: req.StreamId.Value,
     }
     s.opQueue <- op
@@ -222,8 +222,8 @@ func (s *gpuDeviceServer) StreamSend(stream pb.GPUDevice_StreamSendServer) error
     }
 
     // Write data to memory (with correct reduceOp) and send response
-    dstData = utl.ByteArrayToFloat64Slice(s.memory[memAddr:memAddr+dataLen])
-    srcData = utl.ByteArrayToFloat64Slice(data)
+    dstData := utl.ByteArrayToFloat64Slice(s.memory[memAddr:memAddr+dataLen])
+    srcData := utl.ByteArrayToFloat64Slice(data)
     var newData []float64
     switch reduceOpStr {
         case "SUM":
@@ -239,7 +239,7 @@ func (s *gpuDeviceServer) StreamSend(stream pb.GPUDevice_StreamSendServer) error
         default:
             return fmt.Errorf("Invalid reduceop from StreamSend metadata: %s", reduceOpStr)
     }
-    copy(s.memory[memAddr:memAddr+dataLen], newData)
+    copy(s.memory[memAddr:memAddr+dataLen], utl.Float64SliceToByteArray(newData))
     s.streams[streamID].status = pb.Status_SUCCESS
 
     return stream.SendAndClose(&pb.StreamSendResponse{Success: true})
@@ -397,7 +397,7 @@ func (s *gpuDeviceServer) handleSendOperation(streamID uint64, reduceOp pb.Reduc
     // Store streamID in context
     md := metadata.Pairs(
         "streamid", fmt.Sprintf("%d", streamID),
-        "reduceop", reduceOp.String()
+        "reduceop", reduceOp.String(),
     )
     ctx := metadata.NewOutgoingContext(context.Background(), md)
     stream, err := client.StreamSend(ctx)
