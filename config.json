@@ -1,4 +1,8 @@
 {
+  "coordinator": {
+    "ipAddress": "localhost",
+    "port": 8082
+  },
   "devices": [
     {
       "deviceId": 1,

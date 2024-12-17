@@ -84,3 +84,27 @@ type DeviceConfig struct {
     MinMemAddr uint64 `json:"minMemAddr,omitempty"` // Optional, omitempty if not set
     MaxMemAddr uint64 `json:"maxMemAddr,omitempty"` // Optional, omitempty if not set
 }
+
+type CoordinatorConfig struct {
+    IPAddress  string `json:"ipAddress"`
+    Port       uint64 `json:"port"`
+}
+
+// CustomError represents an error that carries a number
+type DeviceError struct {
+    Msg   string
+    Rank    int
+}
+
+// Error implements the error interface
+func (e *DeviceError) Error() string {
+    return fmt.Sprintf("%s (Rank: %d)", e.Msg, e.Rank)
+}
+
+// WrapError creates a new CustomError
+func DeviceErrorf(msg string, rank int) error {
+    return &DeviceError{
+        Msg:  msg,
+        Rank: rank,
+    }
+}

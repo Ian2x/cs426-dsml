@@ -28,6 +28,9 @@ type GpuCoordinatorServer struct {
 
     // Lock
     Mu             sync.Mutex     // NOTE: make RWMutex for faster reads?
+    // ADDED: timeouts for each device
+    deviceTimeouts map[uint64]time.Time           // DeviceID to timeout
+    addDuration time.Duration
 }
 
 type communicator struct {
@@ -49,7 +52,17 @@ func MakeGPUCoordinatorServer() *GpuCoordinatorServer{
         RankToDeviceID: make(map[uint32]uint64),
         Communicators:  make(map[uint64]*communicator),
         NextCommID:     1,
+        DeviceTimeouts: make(map[uint64]time.Time),
+        addDuration:    1000 * time.Millisecond,
     }
+
+    // set timeouts
+    t := time.Now()
+    for _, d := range server.Devices {
+        server.deviceTimeouts[d.DeviceID] = t + server.addDuration
+    }
+
+    go server.checkExpired()
 
     return &server
 }
@@ -265,14 +278,15 @@ func (s *GpuCoordinatorServer) beginShare(
             ReceiveOp: op,
         },
     )
-    if beginSendErr != nil {
-        log.Fatalf("BeginSend failed: %v", beginSendErr)
-        errCh <- beginSendErr
-        return
-    }
-    if !beginSendResp.Initiated {
+    // if beginSendErr != nil {
+    //     log.Fatalf("BeginSend failed: %v", beginSendErr)
+    //     errCh <- beginSendErr
+    //     return
+    // }
+    if beginSendErr != nil || !beginSendResp.Initiated {
         // handle error
-        errCh <- fmt.Errorf("BeginSend not initiated on rank=%d", srcRank)
+        // errCh <- fmt.Errorf("BeginSend not initiated on rank=%d", srcRank)
+        errCh <- utl.DeviceErrorf("BeginSend not initiated", srcRank)
         return
     }
     // invoke beginReceive
@@ -285,14 +299,15 @@ func (s *GpuCoordinatorServer) beginShare(
             SrcRank: &pb.Rank{Value: srcRank},
         },
     )
-    if beginRecvErr != nil {
-        log.Fatalf("BeginReceive failed: %v", beginRecvErr)
-        errCh <- beginRecvErr
-        return
-    }
-    if !beginRecvResp.Initiated {
+    // if beginRecvErr != nil {
+    //     log.Fatalf("BeginReceive failed: %v", beginRecvErr)
+    //     errCh <- beginRecvErr
+    //     return
+    // }
+    if beginRecvErr != nil || !beginRecvResp.Initiated {
         // handle error
-        errCh <- fmt.Errorf("BeginReceive not initiated on rank=%d", dstRank)
+        // errCh <- fmt.Errorf("BeginReceive not initiated on rank=%d", dstRank)
+        errCh <- utl.DeviceErrorf("BeginReceive not initiated", dstRank)
         return
     }
     // check stream status
@@ -305,8 +320,9 @@ func (s *GpuCoordinatorServer) beginShare(
         )
         if getStatusErr != nil {
             // not sure how to handle error here. maybe just resend?
-            log.Printf("GetStreamStatus error on rank=%d: %v", srcRank, getStatusErr)
-            errCh <- getStatusErr
+            // log.Printf("GetStreamStatus error on rank=%d: %v", srcRank, getStatusErr)
+            // errCh <- getStatusErr
+            errCh <- utl.DeviceErrorf("Stream status FAILED", srcRank)
             return
         }
         switch getStatusResp.Status {
@@ -314,8 +330,8 @@ func (s *GpuCoordinatorServer) beginShare(
             return
         case pb.Status_FAILED:
             // handle error
-            // errCh <- (some error)
-            errCh <- fmt.Errorf("stream status FAILED on rank=%d", srcRank)
+            // errCh <- fmt.Errorf("stream status FAILED on rank=%d", srcRank)
+            errCh <- utl.DeviceErrorf("Stream status FAILED", srcRank)
             return
         case pb.Status_IN_PROGRESS:
             // sleep and retry
@@ -352,7 +368,37 @@ func (s *GpuCoordinatorServer) executeAllReduceRing(req *pb.AllReduceRingRequest
     }
     s.Mu.Unlock()
 
-    // Close connections
+    // TODO: need to fix the way we index over devices if we remove expired ones
+    // POSSIBLE FIX: check health of every device before performing operations
+    for rank := range communicator.devices {
+        // read in device memory and store it
+        stream, err := deviceClients[rank].MemcpyDeviceToHost(
+            context.Background(),
+            &pb.MemcpyDeviceToHostRequest{
+                SrcDeviceId: pb.DeviceId{Value: s.RankToDeviceID[rank]},
+                SrcMemAddr: pb.MemAddr{Value: req.MemAddrs[rank]},
+                NumBytes: req.NumBytes,
+            }
+        )
+        if err != nil {
+            fmt.Printf("Error starting MemcpyDeviceToHost: %v\n", err)
+            return
+        }
+        var result []byte
+        for {
+            chunk, err := stream.Recv()
+            if err == io.EOF {
+                break
+            }
+            if err != nil {
+                fmt.Printf("Error receiving data chunk: %v\n", err)
+                return
+            }
+            result = append(result, chunk.Data...)
+        }
+    }
+
+    // defer close connections
     defer func() {
         for _, c := range conns {
             c.Close()
@@ -403,15 +449,17 @@ func (s *GpuCoordinatorServer) executeAllReduceRing(req *pb.AllReduceRingRequest
             // wait for all shares to finish
             wg.Wait()
             // empty error channel and read errors
+            errs := make([]*utl.DeviceError)
+            DrainErrors:
             for {
                 select {
                 case err := <-errCh:
-                    // process error
-                    log.Printf("Error in executeAllReduceRing: %v", err)
+                    errs = append(errs, err)
                 default:
-                    break
+                    break DrainErrors
                 }
             }
+            s.handleErrors(errs)
         }
     }
     close(errCh)
@@ -526,4 +574,41 @@ func (s *GpuCoordinatorServer) handleMemcpyDeviceToHost(ctx context.Context, req
             },
         },
     }, nil
+}
+
+func (s *GpuCoordinatorServer) Heartbeat(ctx context.Context, req *pb.HeartbeatRequest) (*pb.HeartbeatResponse, error) {
+    // lock/unlock
+    s.Mu.Lock()
+    defer s.Mu.Unlock()
+    // check device id
+    id := req.DeviceId
+    // update timeout for device
+    s.deviceTimeouts[id] = time.Now() + s.addDuration
+    // return
+    return &pb.HeartbeatResponse{Success: true}
+}
+
+// goroutine to check if timeouts are expired
+func (s *GpuCoordinatorServer) checkExpired() {
+    for {
+        // lock
+        s.Mu.Lock()
+        // list of expired devices
+        expired := make([]uint64)
+        // check timeouts of devices
+        t := time.Now()
+        for _, d := range s.Devices {
+            if s.deviceTimeouts[d.DeviceID].After(t) {
+                expired := append(expired, d.DeviceID)
+            }
+        }
+        // device(s) are expired, trigger restart
+        if len(expired) > 0 {
+            // update communicators
+
+        }
+        // unlock
+        s.Mu.Unlock()
+        time.Sleep(200 * time.Millisecond)
+    }
 }

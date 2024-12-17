@@ -20,6 +20,7 @@ var (
 )
 
 type Config struct {
+    Coordinator utl.CoordinatorConfig `json:"coordinator"`
     Devices []utl.DeviceConfig `json:"devices"`
 }
 
@@ -59,7 +60,8 @@ func main() {
     }
 
     // Start the gRPC server
-    lis, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
+    lis, err := net.Listen("tcp", fmt.Sprintf(":%d", config.Coordinator.Port))
+    // lis, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
     if err != nil {
         log.Fatalf("Failed to listen: %v", err)
     }
