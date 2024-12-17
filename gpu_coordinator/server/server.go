@@ -10,6 +10,7 @@ import (
 
     sl "github.com/Ian2x/cs426-dsml/gpu_coordinator/server_lib"
     pb "github.com/Ian2x/cs426-dsml/proto"
+    utl "github.com/Ian2x/cs426-dsml/util"
     "google.golang.org/grpc"
 )
 
@@ -17,6 +18,10 @@ var (
     port       = flag.Int("port", 8082, "The server port")
     configFile = flag.String("config_file", "config.json", "Path to config file")
 )
+
+type Config struct {
+    Devices []utl.DeviceConfig `json:"devices"`
+}
 
 func main() {
     flag.Parse()
@@ -27,11 +32,17 @@ func main() {
         log.Fatalf("Failed to read config file: %v", err)
     }
 
-    // Parse json to []DeviceConfig
-    var deviceConfigs []sl.DeviceConfig // Initialized with 
-    err = json.Unmarshal(configData, &deviceConfigs)
+    // Parse json to Config
+    var config Config
+    err = json.Unmarshal(configData, &config)
     if err != nil {
         log.Fatalf("Failed to parse config file: %v", err)
+    }
+
+    // Get deviceConfigs
+    deviceConfigs := config.Devices
+    for _, device := range deviceConfigs {
+        fmt.Printf("Device ID: %d, IP: %s, Port: %d\n", device.DeviceID, device.IPAddress, device.Port)
     }
 
     // Initialize the gpuCoordinatorServer

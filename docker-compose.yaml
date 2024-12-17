@@ -1,0 +1,47 @@
+services:
+  coordinator:
+    build:
+      context: .
+      dockerfile: gpu_coordinator/Dockerfile
+    container_name: coordinator
+    ports:
+      - "8082:8082"
+    command: ["./gpu_coordinator_server", "--config_file=/app/config.json", "--port=8082"]
+    # ^ override CMD from the Dockerfile
+
+  gpu_device_1:
+    build:
+      context: .
+      dockerfile: gpu_device/Dockerfile
+    container_name: device1
+    ports:
+      - "9001:9001"
+    command: ["./gpu_device_server", "--device_id=1", "--config_file=/app/config.json"]
+    # ^ override CMD: device1 listens on port=9001, referencing deviceId=1
+
+  gpu_device_2:
+    build:
+      context: .
+      dockerfile: gpu_device/Dockerfile
+    container_name: device2
+    ports:
+      - "9002:9002"
+    command: ["./gpu_device_server", "--device_id=2", "--config_file=/app/config.json"]
+
+  gpu_device_3:
+    build:
+      context: .
+      dockerfile: gpu_device/Dockerfile
+    container_name: device3
+    ports:
+      - "9003:9003"
+    command: ["./gpu_device_server", "--device_id=3", "--config_file=/app/config.json"]
+
+  gpu_device_4:
+    build:
+      context: .
+      dockerfile: gpu_device/Dockerfile
+    container_name: device4
+    ports:
+      - "9004:9004"
+    command: ["./gpu_device_server", "--device_id=4", "--config_file=/app/config.json"]

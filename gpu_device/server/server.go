@@ -10,14 +10,9 @@ import (
 
 	sl "github.com/Ian2x/cs426-dsml/gpu_device/server_lib"
     pb "github.com/Ian2x/cs426-dsml/proto"
+    utl "github.com/Ian2x/cs426-dsml/util"
     "google.golang.org/grpc"
 )
-
-type deviceConfig struct {
-    deviceID  uint64	// json:"deviceId"
-    ipAddress string	// json:"ipAddress"
-    port      uint64	// json:"port"
-}
 
 /*
 ./gpu_device --device_id=<device_id>
@@ -26,6 +21,10 @@ var (
 	deviceID			= flag.Int("device_id", 0, "Unique device ID")
 	configFile		= flag.String("config_file", "config.json", "Path to config file")
 )
+
+type Config struct {
+    Devices []utl.DeviceConfig `json:"devices"`
+}
 
 func main() {
     flag.Parse()
@@ -40,25 +39,28 @@ func main() {
         log.Fatalf("Failed to read config file: %v", err)
     }
 
-	// Parse json to []DeviceConfig
-    var deviceConfigs []deviceConfig
-    err = json.Unmarshal(configData, &deviceConfigs)
+	// Parse json to Config
+    var config Config
+    err = json.Unmarshal(configData, &config)
     if err != nil {
         log.Fatalf("Failed to parse config file: %v", err)
     }
 
+    // Get deviceConfigs
+    deviceConfigs := config.Devices
+
     // Process all the deviceConfigs
-    var ownConfig *deviceConfig
+    var ownConfig *utl.DeviceConfig
     peers := make(map[uint32]*sl.PeerInfo)
     for i, deviceConfig := range deviceConfigs {
         rank := uint32(i)
 
-        if deviceConfig.deviceID == uint64(*deviceID) {
+        if deviceConfig.DeviceID == uint64(*deviceID) {
             ownConfig = &deviceConfig
         } else {
             peers[rank] = &sl.PeerInfo{
-                IpAddress: deviceConfig.ipAddress,
-                Port:      deviceConfig.port,
+                IpAddress: deviceConfig.IPAddress,
+                Port:      deviceConfig.Port,
             }
         }
     }
@@ -68,7 +70,7 @@ func main() {
     }
 
 	// Start the gRPC server
-    lis, err := net.Listen("tcp", fmt.Sprintf(":%d", ownConfig.port))
+    lis, err := net.Listen("tcp", fmt.Sprintf(":%d", ownConfig.Port))
     if err != nil {
         log.Fatalf("Failed to listen: %v", err)
     }

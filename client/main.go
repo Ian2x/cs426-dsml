@@ -5,10 +5,11 @@ import (
     "log"
     "time"
 
-    pb "cs426-dsml/proto" // Adjust the import path as necessary
-    "google.golang.org/grpc"
+    pb "github.com/Ian2x/cs426-dsml/proto"
+    utl "github.com/Ian2x/cs426-dsml/util"
 
-    // utl "github.com/Ian2x/cs426-dsml/util"
+    "google.golang.org/grpc"
+    "google.golang.org/grpc/credentials/insecure"
 )
 
 func main() {
@@ -50,13 +51,15 @@ func main() {
     for i := 0; i < N; i++ {
         gpu := devices[i]
         // Convert vecs[i] to bytes
-        dataBytes := Float64SliceToByteArray(vecs[i]) // Implement this utility function
+        dataBytes := utl.Float64SliceToByteArray(vecs[i]) // Implement this utility function
 
         _, err := client.Memcpy(ctx, &pb.MemcpyRequest{
-            HostToDevice: &pb.MemcpyHostToDeviceRequest{
-                HostSrcData: dataBytes,
-                DstDeviceId: gpu.DeviceId,
-                DstMemAddr:  gpu.MinMemAddr,
+            Either: &pb.MemcpyRequest_HostToDevice{
+                HostToDevice: &pb.MemcpyHostToDeviceRequest{
+                    HostSrcData: dataBytes,
+                    DstDeviceId: gpu.DeviceId,
+                    DstMemAddr:  gpu.MinMemAddr,
+                },
             },
         })
         if err != nil {
@@ -115,17 +118,26 @@ func main() {
 
     // Data transfer out from GPU 0 to "CPU"
     memcpyResp, err := client.Memcpy(ctx, &pb.MemcpyRequest{
-        DeviceToHost: &pb.MemcpyDeviceToHostRequest{
-            SrcDeviceId: devices[0].DeviceId,
-            SrcMemAddr:  devices[0].MinMemAddr,
-            NumBytes:    uint64(len(vecs[0]) * 8), // Assuming float64
+        Either: &pb.MemcpyRequest_DeviceToHost{
+            DeviceToHost: &pb.MemcpyDeviceToHostRequest{
+                SrcDeviceId: devices[0].DeviceId,
+                SrcMemAddr:  devices[0].MinMemAddr,
+                NumBytes:    uint64(len(vecs[0]) * 8),
+            },
         },
     })
     if err != nil {
         log.Fatalf("Memcpy failed: %v", err)
     }
 
-    vecOut := ByteArrayToFloat64Slice(memcpyResp.DeviceToHost.DstData) // Implement this utility function
+    deviceToHostResp, ok := memcpyResp.Either.(*pb.MemcpyResponse_DeviceToHost)
+    if !ok {
+        log.Fatalf("Failed to parse Memcpy response as DeviceToHost")
+    }
+
+    // Access the DstData field
+    vecOut := utl.ByteArrayToFloat64Slice(deviceToHostResp.DeviceToHost.DstData)
+    log.Printf("Received data: %v\n", vecOut)
 
     // Output vecOut as final result
     log.Printf("Result vector: %v", vecOut)

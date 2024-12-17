@@ -76,3 +76,11 @@ func MaxFloat64Slices(a, b []float64) []float64 {
     }
     return result
 }
+
+type DeviceConfig struct {
+    DeviceID   uint64 `json:"deviceId"`
+    IPAddress  string `json:"ipAddress"`
+    Port       uint64 `json:"port"`
+    MinMemAddr uint64 `json:"minMemAddr,omitempty"` // Optional, omitempty if not set
+    MaxMemAddr uint64 `json:"maxMemAddr,omitempty"` // Optional, omitempty if not set
+}

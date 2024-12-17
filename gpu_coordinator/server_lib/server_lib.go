@@ -11,7 +11,7 @@ import (
     "time"
     "log"
 
-    // utl "github.com/Ian2x/cs426-dsml/util"
+    utl "github.com/Ian2x/cs426-dsml/util"
 )
 
 // GpuCoordinatorServer implements the GPUCoordinator service
@@ -19,7 +19,7 @@ type GpuCoordinatorServer struct {
     pb.UnimplementedGPUCoordinatorServer
 
     // Devices and Communicators
-    Devices        map[uint64]*DeviceConfig       // DeviceID to DeviceConfig
+    Devices        map[uint64]*utl.DeviceConfig       // DeviceID to DeviceConfig
     RankToDeviceID map[uint32]uint64              // Rank to DeviceID
     Communicators  map[uint64]*communicator       // CommID to Communicator
 
@@ -30,17 +30,9 @@ type GpuCoordinatorServer struct {
     Mu             sync.Mutex     // NOTE: make RWMutex for faster reads?
 }
 
-type DeviceConfig struct {
-    DeviceID   uint64
-    IpAddress  string
-    Port       uint64
-    MinMemAddr uint64
-    MaxMemAddr uint64
-}
-
 type communicator struct {
     commID       uint64
-    devices      map[uint32]*DeviceConfig // Rank to DeviceConfig
+    devices      map[uint32]*utl.DeviceConfig // Rank to DeviceConfig
     groupStarted bool
     opQueue      []operation
     status       pb.Status
@@ -53,7 +45,7 @@ type operation struct {
 
 func MakeGPUCoordinatorServer() *GpuCoordinatorServer{
     server := GpuCoordinatorServer{
-        Devices:        make(map[uint64]*DeviceConfig),
+        Devices:        make(map[uint64]*utl.DeviceConfig),
         RankToDeviceID: make(map[uint32]uint64),
         Communicators:  make(map[uint64]*communicator),
         NextCommID:     1,
@@ -81,7 +73,7 @@ func (s *GpuCoordinatorServer) CommInit(ctx context.Context, req *pb.CommInitReq
     // Select devices for communicator
     communicator := &communicator{
         commID:  commID,
-        devices: make(map[uint32]*DeviceConfig),
+        devices: make(map[uint32]*utl.DeviceConfig),
         groupStarted: false,
         opQueue: make([]operation, 0, req.NumDevices * 100),
         status: pb.Status_IN_PROGRESS,
@@ -351,7 +343,7 @@ func (s *GpuCoordinatorServer) executeAllReduceRing(req *pb.AllReduceRingRequest
     }
 
     for rank, deviceConfig := range communicator.devices {
-        target := fmt.Sprintf("%s:%d", deviceConfig.IpAddress, deviceConfig.Port)
+        target := fmt.Sprintf("%s:%d", deviceConfig.IPAddress, deviceConfig.Port)
         conn, err := grpc.NewClient(target, opts...)
         if err != nil {
             s.Mu.Unlock()
@@ -452,7 +444,7 @@ func (s *GpuCoordinatorServer) handleMemcpyHostToDevice(ctx context.Context, req
     // Connect to destination device
     var opts []grpc.DialOption
 	opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
-    conn, err := grpc.NewClient(fmt.Sprintf("%s:%d", deviceInfo.IpAddress, deviceInfo.Port), opts...)
+    conn, err := grpc.NewClient(fmt.Sprintf("%s:%d", deviceInfo.IPAddress, deviceInfo.Port), opts...)
     if err != nil {
         return nil, err
     }
@@ -506,7 +498,7 @@ func (s *GpuCoordinatorServer) handleMemcpyDeviceToHost(ctx context.Context, req
     // Connect to source device
     var opts []grpc.DialOption
 	opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
-    conn, err := grpc.NewClient(fmt.Sprintf("%s:%d", deviceInfo.IpAddress, deviceInfo.Port), opts...)
+    conn, err := grpc.NewClient(fmt.Sprintf("%s:%d", deviceInfo.IPAddress, deviceInfo.Port), opts...)
     if err != nil {
         return nil, err
     }

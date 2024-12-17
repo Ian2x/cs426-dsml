@@ -8,6 +8,8 @@ RUN go mod download
 
 COPY . .
 
+COPY config.json /app/config.json
+
 WORKDIR /app/gpu_coordinator
 
 RUN go build -o gpu_coordinator_server ./server
@@ -16,4 +18,4 @@ RUN go build -o gpu_coordinator_server ./server
 EXPOSE 8082
 
 # Run
-CMD ["./gpu_coordinator_server"]
+CMD ["./gpu_coordinator_server", "--config_file=/app/config.json", "--port=8082"]
