@@ -276,6 +276,7 @@ func (s *GpuCoordinatorServer) beginShare(
         return
     }
     // invoke beginReceive
+    log.Printf("Invoked send (%d --> %d) on streamID %d", srcRank, dstRank, beginSendResp.StreamId.Value)
     beginRecvResp, beginRecvErr := clients[dstRank].BeginReceive(
         ctx,
         &pb.BeginReceiveRequest{
@@ -322,6 +323,7 @@ func (s *GpuCoordinatorServer) beginShare(
         case pb.Status_IN_PROGRESS:
             // sleep and retry
             time.Sleep(100 * time.Millisecond)
+            log.Printf("beginShare %d -> %d in progress", srcRank, dstRank)
         }
     }
 }
@@ -372,6 +374,7 @@ func (s *GpuCoordinatorServer) executeAllReduceRing(req *pb.AllReduceRingRequest
     
     // begin allReduceRing
     for phase := range 2 {
+        log.Printf("STARTING PHASE %d", phase)
         var reduceOp pb.ReduceOp
         if phase == 0 {
             // share-reduce phase
@@ -403,17 +406,20 @@ func (s *GpuCoordinatorServer) executeAllReduceRing(req *pb.AllReduceRingRequest
             }
             // s.Mu.Unlock()
             // wait for all shares to finish
+            log.Printf("Coordinator waiting round %d", i)
             wg.Wait()
+            log.Printf("Coordinator done waiting round %d", i)
             // empty error channel and read errors
+            DrainErrors:
             for {
                 select {
                 case err := <-errCh:
-                    // process error
                     log.Printf("Error in executeAllReduceRing: %v", err)
                 default:
-                    break
+                    break DrainErrors
                 }
             }
+            log.Printf("Actually at end")
         }
     }
     close(errCh)

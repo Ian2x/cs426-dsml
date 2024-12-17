@@ -114,6 +114,7 @@ func (s *gpuDeviceServer) BeginSend(ctx context.Context, req *pb.BeginSendReques
         numBytes: req.NumBytes,
         dstRank: req.DstRank.Value,
     }
+    log.Printf("Device %d sending stream %d", s.deviceId, streamID)
 
     // Queue the operation
     op := &operation{
@@ -145,6 +146,7 @@ func (s *gpuDeviceServer) BeginReceive(ctx context.Context, req *pb.BeginReceive
         numBytes: req.NumBytes,
         srcRank: req.SrcRank.Value,
     }
+    log.Printf("Device %d receiving stream %d", s.deviceId, req.StreamId.Value)
 
     // Queue the operation
     op := &operation{
@@ -378,6 +380,7 @@ func (s *gpuDeviceServer) handleSendOperation(streamID uint64, reduceOp pb.Reduc
 
     // Get address of dstPeer
     dstAddress := fmt.Sprintf("%s:%d", dstPeer.IpAddress, dstPeer.Port)
+    log.Printf("Sending to %d at %s", streamInfo.dstRank, dstAddress)
 
     // Create a gRPC client to dstAddress
     var opts []grpc.DialOption
@@ -390,6 +393,7 @@ func (s *gpuDeviceServer) handleSendOperation(streamID uint64, reduceOp pb.Reduc
         s.mu.Unlock()
         return
     }
+    log.Printf("Succeeded connecting to %d at %s", streamInfo.dstRank, dstAddress)
     defer conn.Close()
 
     client := pb.NewGPUDeviceClient(conn)
@@ -445,5 +449,6 @@ func (s *gpuDeviceServer) handleSendOperation(streamID uint64, reduceOp pb.Reduc
 
     s.mu.Lock()
     s.streams[streamID].status = pb.Status_SUCCESS
+    log.Printf("StreamSend succeeded (%d --> %d)", s.deviceId, streamInfo.dstRank)
     s.mu.Unlock()
 }

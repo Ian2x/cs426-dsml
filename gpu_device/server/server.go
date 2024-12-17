@@ -18,7 +18,7 @@ import (
 ./gpu_device --device_id=<device_id>
 */
 var (
-	deviceID			= flag.Int("device_id", 0, "Unique device ID")
+	deviceID			= flag.Int("device_id", -1, "Unique device ID")
 	configFile		= flag.String("config_file", "config.json", "Path to config file")
 )
 
@@ -26,10 +26,25 @@ type Config struct {
     Devices []utl.DeviceConfig `json:"devices"`
 }
 
+func getLocalIP() string {
+    addrs, err := net.InterfaceAddrs()
+    if err != nil {
+        log.Printf("Error retrieving network interfaces: %v", err)
+        return "unknown"
+    }
+    for _, addr := range addrs {
+        // Check if the address is not a loopback and is IPv4
+        if ipNet, ok := addr.(*net.IPNet); ok && !ipNet.IP.IsLoopback() && ipNet.IP.To4() != nil {
+            return ipNet.IP.String()
+        }
+    }
+    return "unknown"
+}
+
 func main() {
     flag.Parse()
 
-    if *deviceID == 0 {
+    if *deviceID == -1 {
         log.Fatalf("Usage: gpu_device --device_id=<device_id> [--config_file=<config_file>]")
     }
 
@@ -80,6 +95,10 @@ func main() {
     pb.RegisterGPUDeviceServer(s, sl.MakeGPUDeviceServer(uint64(*deviceID), peers))
 
 	log.Printf("GPU Device server (device ID: %d) listening at %v", *deviceID, lis.Addr())
+
+    localIP := getLocalIP()
+    log.Printf("Device ID %d initialized with IP address: %s", *deviceID, localIP)
+
 
 	if err := s.Serve(lis); err != nil {
 		log.Fatalf("Failed to serve: %v", err)

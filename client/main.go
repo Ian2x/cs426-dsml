@@ -16,7 +16,7 @@ func main() {
     // Establish a connection to the GPUCoordinator server
     var opts []grpc.DialOption
 	opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
-    conn, err := grpc.NewClient("localhost:8082", opts...)
+    conn, err := grpc.NewClient("coordinator:8082", opts...)
     if err != nil {
         log.Fatalf("Failed to connect: %v", err)
     }
@@ -63,7 +63,7 @@ func main() {
             },
         })
         if err != nil {
-            log.Fatalf("Memcpy failed: %v", err)
+            log.Fatalf("Memcpy (HostToDevice) failed: %v", err)
         }
     }
 
@@ -116,31 +116,70 @@ func main() {
         }
     }
 
-    // Data transfer out from GPU 0 to "CPU"
-    memcpyResp, err := client.Memcpy(ctx, &pb.MemcpyRequest{
-        Either: &pb.MemcpyRequest_DeviceToHost{
-            DeviceToHost: &pb.MemcpyDeviceToHostRequest{
-                SrcDeviceId: devices[0].DeviceId,
-                SrcMemAddr:  devices[0].MinMemAddr,
-                NumBytes:    uint64(len(vecs[0]) * 8),
+    // // Data transfer out from GPU 0 to "CPU"
+    // memcpyResp, err := client.Memcpy(ctx, &pb.MemcpyRequest{
+    //     Either: &pb.MemcpyRequest_DeviceToHost{
+    //         DeviceToHost: &pb.MemcpyDeviceToHostRequest{
+    //             SrcDeviceId: devices[0].DeviceId,
+    //             SrcMemAddr:  devices[0].MinMemAddr,
+    //             NumBytes:    uint64(len(vecs[0]) * 8),
+    //         },
+    //     },
+    // })
+    // if err != nil {
+    //     log.Fatalf("Memcpy (DeviceToHost) failed: %v", err)
+    // }
+
+    // deviceToHostResp, ok := memcpyResp.Either.(*pb.MemcpyResponse_DeviceToHost)
+    // if !ok {
+    //     log.Fatalf("Failed to parse Memcpy response as DeviceToHost")
+    // }
+
+    // // Access the DstData field
+    // vecOut := utl.ByteArrayToFloat64Slice(deviceToHostResp.DeviceToHost.DstData)
+    // log.Printf("Received data: %v\n", vecOut)
+
+    // // Output vecOut as final result
+    // log.Printf("Result vector: %v", vecOut)
+
+
+
+
+    // Loop through devices 0 to 3
+    for i := 0; i <= 3; i++ {
+        // Ensure that the devices slice has enough elements
+        if i >= len(devices) {
+            log.Fatalf("Device index %d out of range. Total devices available: %d", i, len(devices))
+        }
+
+        // Perform the Memcpy operation for the current device
+        memcpyResp, err := client.Memcpy(ctx, &pb.MemcpyRequest{
+            Either: &pb.MemcpyRequest_DeviceToHost{
+                DeviceToHost: &pb.MemcpyDeviceToHostRequest{
+                    SrcDeviceId: devices[i].DeviceId,                   // Current device ID
+                    SrcMemAddr:  devices[i].MinMemAddr,                  // Current device memory address
+                    NumBytes:    uint64(len(vecs[i]) * 8),               // Number of bytes to copy
+                },
             },
-        },
-    })
-    if err != nil {
-        log.Fatalf("Memcpy failed: %v", err)
+        })
+        if err != nil {
+            log.Fatalf("Memcpy (DeviceToHost) failed for device %d: %v", i, err)
+        }
+
+        // Parse the Memcpy response
+        deviceToHostResp, ok := memcpyResp.Either.(*pb.MemcpyResponse_DeviceToHost)
+        if !ok {
+            log.Fatalf("Failed to parse Memcpy response as DeviceToHost for device %d", i)
+        }
+
+        // Convert the received byte array to a slice of float64
+        vecOut := utl.ByteArrayToFloat64Slice(deviceToHostResp.DeviceToHost.DstData)
+
+        // Print the received data for the current device
+        log.Printf("Received data from device %d: %v", i, vecOut)
+
     }
 
-    deviceToHostResp, ok := memcpyResp.Either.(*pb.MemcpyResponse_DeviceToHost)
-    if !ok {
-        log.Fatalf("Failed to parse Memcpy response as DeviceToHost")
-    }
-
-    // Access the DstData field
-    vecOut := utl.ByteArrayToFloat64Slice(deviceToHostResp.DeviceToHost.DstData)
-    log.Printf("Received data: %v\n", vecOut)
-
-    // Output vecOut as final result
-    log.Printf("Result vector: %v", vecOut)
 
     // Free any resources etc.
     // Implement CommDestroy if necessary
