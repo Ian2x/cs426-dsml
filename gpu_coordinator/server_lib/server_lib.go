@@ -276,7 +276,7 @@ func (s *GpuCoordinatorServer) beginShare(
         return
     }
     // invoke beginReceive
-    log.Printf("Invoked send (%d --> %d) on streamID %d", srcRank, dstRank, beginSendResp.StreamId.Value)
+    log.Printf("Invoked send [%d (addr: %d) --> %d (addr: %d)] on streamID %d", srcRank, srcBuffAddr, dstRank, dstBuffAddr, beginSendResp.StreamId.Value)
     beginRecvResp, beginRecvErr := clients[dstRank].BeginReceive(
         ctx,
         &pb.BeginReceiveRequest{
@@ -323,7 +323,6 @@ func (s *GpuCoordinatorServer) beginShare(
         case pb.Status_IN_PROGRESS:
             // sleep and retry
             time.Sleep(100 * time.Millisecond)
-            log.Printf("beginShare %d -> %d in progress", srcRank, dstRank)
         }
     }
 }
@@ -373,8 +372,7 @@ func (s *GpuCoordinatorServer) executeAllReduceRing(req *pb.AllReduceRingRequest
     errCh := make(chan error, 2 * numDevices)
     
     // begin allReduceRing
-    for phase := range 2 {
-        log.Printf("STARTING PHASE %d", phase)
+    for phase := uint32(0); phase < 2; phase++ {
         var reduceOp pb.ReduceOp
         if phase == 0 {
             // share-reduce phase
@@ -385,6 +383,7 @@ func (s *GpuCoordinatorServer) executeAllReduceRing(req *pb.AllReduceRingRequest
         }
 
         for i := uint32(0); i < numDevices - 1; i++ {
+            log.Printf("STARTING PHASE %d, STEP %d", phase, i)
             // initialize wait group
             var wg sync.WaitGroup
             // node i sends, node i + 1 receives
@@ -393,8 +392,8 @@ func (s *GpuCoordinatorServer) executeAllReduceRing(req *pb.AllReduceRingRequest
                 srcRank := uint32(rank % numDevices)
                 dstRank := uint32((rank + 1) % numDevices)
                 // calculate addrs for send and receive
-                srcBuffAddr := uint64(memAddrs[srcRank].Value + (bytesPerReq * uint64(srcRank - i)) % numBytes)
-                dstBuffAddr := uint64(memAddrs[dstRank].Value + (bytesPerReq * uint64(dstRank - i + numDevices - 1)) % numBytes)
+                srcBuffAddr := uint64(memAddrs[srcRank].Value + (bytesPerReq * uint64((srcRank + numDevices - i + phase) % numDevices)) % numBytes)
+                dstBuffAddr := uint64(memAddrs[dstRank].Value + (bytesPerReq * uint64((dstRank + 2 * numDevices - i - 1 + phase) % numDevices)) % numBytes)
                 // invoke beginShare
                 wg.Add(1)
                 go s.beginShare(
@@ -406,9 +405,7 @@ func (s *GpuCoordinatorServer) executeAllReduceRing(req *pb.AllReduceRingRequest
             }
             // s.Mu.Unlock()
             // wait for all shares to finish
-            log.Printf("Coordinator waiting round %d", i)
             wg.Wait()
-            log.Printf("Coordinator done waiting round %d", i)
             // empty error channel and read errors
             DrainErrors:
             for {
@@ -419,7 +416,6 @@ func (s *GpuCoordinatorServer) executeAllReduceRing(req *pb.AllReduceRingRequest
                     break DrainErrors
                 }
             }
-            log.Printf("Actually at end")
         }
     }
     close(errCh)

@@ -114,7 +114,6 @@ func (s *gpuDeviceServer) BeginSend(ctx context.Context, req *pb.BeginSendReques
         numBytes: req.NumBytes,
         dstRank: req.DstRank.Value,
     }
-    log.Printf("Device %d sending stream %d", s.deviceId, streamID)
 
     // Queue the operation
     op := &operation{
@@ -146,7 +145,6 @@ func (s *gpuDeviceServer) BeginReceive(ctx context.Context, req *pb.BeginReceive
         numBytes: req.NumBytes,
         srcRank: req.SrcRank.Value,
     }
-    log.Printf("Device %d receiving stream %d", s.deviceId, req.StreamId.Value)
 
     // Queue the operation
     op := &operation{
@@ -217,11 +215,13 @@ func (s *gpuDeviceServer) StreamSend(stream pb.GPUDevice_StreamSendServer) error
     // Check memory memory bounds
     s.mu.Lock()
     defer s.mu.Unlock()
-    memAddr := streamInfo.recvBuffAddr - s.minMemAddr
-    if memAddr < 0 || memAddr+dataLen > uint64(len(s.memory)) {
+
+    if streamInfo.recvBuffAddr < s.minMemAddr || streamInfo.recvBuffAddr - s.minMemAddr + dataLen > uint64(len(s.memory)) {
         s.streams[streamID].status = pb.Status_FAILED
         return fmt.Errorf("Memory write out of bounds")
     }
+
+    memAddr := streamInfo.recvBuffAddr - s.minMemAddr
 
     // Write data to memory (with correct reduceOp) and send response
     dstData := utl.ByteArrayToFloat64Slice(s.memory[memAddr:memAddr+dataLen])
@@ -380,7 +380,6 @@ func (s *gpuDeviceServer) handleSendOperation(streamID uint64, reduceOp pb.Reduc
 
     // Get address of dstPeer
     dstAddress := fmt.Sprintf("%s:%d", dstPeer.IpAddress, dstPeer.Port)
-    log.Printf("Sending to %d at %s", streamInfo.dstRank, dstAddress)
 
     // Create a gRPC client to dstAddress
     var opts []grpc.DialOption
@@ -393,7 +392,6 @@ func (s *gpuDeviceServer) handleSendOperation(streamID uint64, reduceOp pb.Reduc
         s.mu.Unlock()
         return
     }
-    log.Printf("Succeeded connecting to %d at %s", streamInfo.dstRank, dstAddress)
     defer conn.Close()
 
     client := pb.NewGPUDeviceClient(conn)
@@ -404,6 +402,27 @@ func (s *gpuDeviceServer) handleSendOperation(streamID uint64, reduceOp pb.Reduc
         "reduceop", reduceOp.String(),
     )
     ctx := metadata.NewOutgoingContext(context.Background(), md)
+
+    // Check that client (destination) is ready
+    const maxRetries = 10
+    const retryDelay = 100 * time.Millisecond
+    for attempt := 1; attempt <= maxRetries; attempt++ {
+        statusResp, err := client.GetStreamStatus(ctx, &pb.GetStreamStatusRequest{
+            StreamId: &pb.StreamId{Value: streamID},
+        })
+        if err == nil && statusResp.Status == pb.Status_IN_PROGRESS {
+            break
+        }
+        if attempt == maxRetries {
+            log.Printf("StreamSend failed: Stream %d not in progress on destination after %d attempts", streamID, maxRetries)
+            s.mu.Lock()
+            s.streams[streamID].status = pb.Status_FAILED
+            s.mu.Unlock()
+            return
+        }
+        time.Sleep(retryDelay)
+    }
+
     stream, err := client.StreamSend(ctx)
     if err != nil {
         log.Printf("Failed to StreamSend on receiving end: %v", err)
