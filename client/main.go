@@ -4,6 +4,7 @@ import (
     "context"
     "log"
     "time"
+    "math"
 
     pb "github.com/Ian2x/cs426-dsml/proto"
     utl "github.com/Ian2x/cs426-dsml/util"
@@ -13,26 +14,24 @@ import (
 )
 
 func main() {
-    // Establish a connection to the GPUCoordinator server
+    // Connect to GPU Coordinator
     var opts []grpc.DialOption
 	opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
-    conn, err := grpc.NewClient("localhost:8082", opts...)
+    conn, err := grpc.NewClient("coordinator:8082", opts...)
     if err != nil {
         log.Fatalf("Failed to connect: %v", err)
     }
     defer conn.Close()
-
     client := pb.NewGPUCoordinatorClient(conn)
 
-    // N vectors on "CPU / host"
-    N := 4 // Example number of devices
+    // Create data vectors
+    N := 4
     vecs := make([][]float64, N)
-    // Fill vectors with data...
     for i := 0; i < N; i++ {
-        vecs[i] = []float64{float64(i + 1), float64(i + 2)} // Example data
+        vecs[i] = []float64{float64(math.Pow(2, float64(i))), float64(math.Pow(2, float64(i))), float64(math.Pow(2, float64(i))), float64(math.Pow(2, float64(i)))} // Example data
     }
 
-    // Create / initialize a communicator with N GPUs
+    // Create communicator
     ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
     defer cancel()
     commInitResp, err := client.CommInit(ctx, &pb.CommInitRequest{
@@ -47,11 +46,10 @@ func main() {
     commId := commInitResp.CommId
     devices := commInitResp.Devices
 
-    // Transfer vectors to each individual GPU
+    // Memcpy vectors to each GPU
     for i := 0; i < N; i++ {
         gpu := devices[i]
-        // Convert vecs[i] to bytes
-        dataBytes := utl.Float64SliceToByteArray(vecs[i]) // Implement this utility function
+        dataBytes := utl.Float64SliceToByteArray(vecs[i])
 
         _, err := client.Memcpy(ctx, &pb.MemcpyRequest{
             Either: &pb.MemcpyRequest_HostToDevice{
@@ -63,11 +61,11 @@ func main() {
             },
         })
         if err != nil {
-            log.Fatalf("Memcpy failed: %v", err)
+            log.Fatalf("Memcpy (HostToDevice) failed: %v", err)
         }
     }
 
-    // Initiate the operation
+    // Start the group
     _, err = client.GroupStart(ctx, &pb.GroupStartRequest{
         CommId: commId,
     })
@@ -75,7 +73,7 @@ func main() {
         log.Fatalf("GroupStart failed: %v", err)
     }
 
-    // Prepare memAddrs map for AllReduceRingRequest
+    // Execute AllReduceRing
     memAddrs := make(map[uint32]*pb.MemAddr)
     for i, gpu := range devices {
         memAddrs[uint32(i)] = gpu.MinMemAddr
@@ -83,7 +81,7 @@ func main() {
 
     _, err = client.AllReduceRing(ctx, &pb.AllReduceRingRequest{
         CommId:   commId,
-        Count:    uint64(len(vecs[0])),
+        Count:    uint64(8 * len(vecs[0])), // 8 bytes per uint64 (i think)
         Op:       pb.ReduceOp_SUM,
         MemAddrs: memAddrs,
     })
@@ -98,7 +96,7 @@ func main() {
         log.Fatalf("GroupEnd failed: %v", err)
     }
 
-    // Check status / synchronize
+    // Check status
     for {
         commStatusResp, err := client.GetCommStatus(ctx, &pb.GetCommStatusRequest{
             CommId: commId,
@@ -116,29 +114,32 @@ func main() {
         }
     }
 
-    // Data transfer out from GPU 0 to "CPU"
-    memcpyResp, err := client.Memcpy(ctx, &pb.MemcpyRequest{
-        Either: &pb.MemcpyRequest_DeviceToHost{
-            DeviceToHost: &pb.MemcpyDeviceToHostRequest{
-                SrcDeviceId: devices[0].DeviceId,
-                SrcMemAddr:  devices[0].MinMemAddr,
-                NumBytes:    uint64(len(vecs[0]) * 8),
+    // Loop through devices 0 to 3
+    for i := range 4 {
+
+        // Perform the Memcpy operation for the current device
+        memcpyResp, err := client.Memcpy(ctx, &pb.MemcpyRequest{
+            Either: &pb.MemcpyRequest_DeviceToHost{
+                DeviceToHost: &pb.MemcpyDeviceToHostRequest{
+                    SrcDeviceId: devices[i].DeviceId,                   // Current device ID
+                    SrcMemAddr:  devices[i].MinMemAddr,                  // Current device memory address
+                    NumBytes:    uint64(len(vecs[i]) * 8),               // Number of bytes to copy
+                },
             },
-        },
-    })
-    if err != nil {
-        log.Fatalf("Memcpy failed: %v", err)
+        })
+        if err != nil {
+            log.Fatalf("Memcpy (DeviceToHost) failed for device %d: %v", i, err)
+        }
+
+        // Print Memcpy response
+        deviceToHostResp, ok := memcpyResp.Either.(*pb.MemcpyResponse_DeviceToHost)
+        if !ok {
+            log.Fatalf("Failed to parse Memcpy response as DeviceToHost for device %d", i)
+        }
+
+        vecOut := utl.ByteArrayToFloat64Slice(deviceToHostResp.DeviceToHost.DstData)
+
+        log.Printf("Received data from device %d: %v", i, vecOut)
+
     }
-
-    deviceToHostResp, ok := memcpyResp.Either.(*pb.MemcpyResponse_DeviceToHost)
-    if !ok {
-        log.Fatalf("Failed to parse Memcpy response as DeviceToHost")
-    }
-
-    // Access the DstData field
-    vecOut := utl.ByteArrayToFloat64Slice(deviceToHostResp.DeviceToHost.DstData)
-    log.Printf("Received data: %v\n", vecOut)
-
-    // Free any resources etc.
-    // Implement CommDestroy if necessary
 }
