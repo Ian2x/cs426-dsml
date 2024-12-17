@@ -10,6 +10,7 @@ import (
 
     "google.golang.org/grpc"
     "google.golang.org/grpc/credentials/insecure"
+    utl "github.com/Ian2x/cs426-dsml/util"
 )
 
 func main() {
@@ -138,9 +139,6 @@ func main() {
     // Access the DstData field
     vecOut := utl.ByteArrayToFloat64Slice(deviceToHostResp.DeviceToHost.DstData)
     log.Printf("Received data: %v\n", vecOut)
-
-    // Output vecOut as final result
-    log.Printf("Result vector: %v", vecOut)
 
     // Free any resources etc.
     // Implement CommDestroy if necessary

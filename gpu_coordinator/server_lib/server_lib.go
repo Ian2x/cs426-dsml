@@ -297,8 +297,6 @@ func (s *GpuCoordinatorServer) beginShare(
     }
     // check stream status
     for {
-        // note: seems like stream is only recorded in the src node, not in the dst node
-        // (could be correct behavior though)
         getStatusResp, getStatusErr := clients[srcRank].GetStreamStatus(
             ctx,
             &pb.GetStreamStatusRequest{
