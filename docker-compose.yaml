@@ -121,6 +121,7 @@ services:
     environment:
       - TEST=${TEST}
       - ALGO=${ALGO}
+      - FAIL=${FAIL}
     depends_on:
       - coordinator
       - gpu_device_0

@@ -60,6 +60,13 @@ func main() {
         log.Printf("ALGO not properly set -> using default value (allreducering)")
         algo = "allreducering"
     }
+    fail := os.Getenv("FAIL")
+    switch fail {
+    case "before", "during":
+    default:
+        fail = "none"
+    }
+
 
 	// Define variables
 	var N int
@@ -134,7 +141,7 @@ func main() {
     devices := commInitResp.Devices
 
     // remove a device before group starts
-    if test == 1 {
+    if fail == "before" {
         randomIndex := uint32(rand.Intn(len(devices)))
         commRemoveResp, err := client.CommRemoveDevice(
             context.Background(),
@@ -193,7 +200,7 @@ func main() {
     }
 
     // remove device while ARR is executing
-    if test == 2 {
+    if fail == "during" {
         go func() {
             time.Sleep(100 * time.Millisecond)
             mu.Lock()
