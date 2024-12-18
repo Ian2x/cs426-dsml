@@ -4,7 +4,9 @@ import (
     "context"
     "log"
     "time"
-    "math"
+    // "math"
+    "os"
+	"strconv"
 
     pb "github.com/Ian2x/cs426-dsml/proto"
     utl "github.com/Ian2x/cs426-dsml/util"
@@ -14,6 +16,44 @@ import (
 )
 
 func main() {
+    // Parse TEST and ALGO
+    testStr := os.Getenv("TEST")
+	if testStr == "" {
+		log.Printf("TEST not set -> using default value 0")
+		testStr = "0"
+	}
+	test, err := strconv.Atoi(testStr)
+	if err != nil {
+		log.Printf("Invalid TEST value: %s -> using default value 0", testStr)
+		test = 0
+	}
+    algo := os.Getenv("ALGO")
+	if algo == "" {
+		log.Printf("ALGO not set -> using default value allringreduce")
+		algo = "allringreduce"
+	}
+
+	// Define variables
+	var N int
+	var vecs [][]float64
+
+	// Which test to run
+	switch test {
+    case 0:
+        N = 3
+        vecs = [][]float64{
+            {1, 2, 3, 4, 5, 6, 7, 8},
+            {9, 10, 11, 12, 13, 14, 15, 16},
+            {17, 18, 19, 20, 21, 22, 23, 24},
+        }
+    default:
+        N = 2
+        vecs = [][]float64{
+            {1, 2},
+            {3, 4},
+        }
+    }
+
     // Connect to GPU Coordinator
     var opts []grpc.DialOption
 	opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -23,13 +63,6 @@ func main() {
     }
     defer conn.Close()
     client := pb.NewGPUCoordinatorClient(conn)
-
-    // Create data vectors
-    N := 4
-    vecs := make([][]float64, N)
-    for i := 0; i < N; i++ {
-        vecs[i] = []float64{float64(math.Pow(2, float64(i))), float64(math.Pow(2, float64(i))), float64(math.Pow(2, float64(i))), float64(math.Pow(2, float64(i)))} // Example data
-    }
 
     // Create communicator
     ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
@@ -66,6 +99,7 @@ func main() {
     }
 
     // Start the group
+    groupStart := time.Now()
     _, err = client.GroupStart(ctx, &pb.GroupStartRequest{
         CommId: commId,
     })
@@ -73,7 +107,7 @@ func main() {
         log.Fatalf("GroupStart failed: %v", err)
     }
 
-    // Execute AllReduceRing
+    // Execute AllReduceRing (Part 1) --> add everything
     memAddrs := make(map[uint32]*pb.MemAddr)
     for i, gpu := range devices {
         memAddrs[uint32(i)] = gpu.MinMemAddr
@@ -82,6 +116,17 @@ func main() {
     _, err = client.AllReduceRing(ctx, &pb.AllReduceRingRequest{
         CommId:   commId,
         Count:    uint64(8 * len(vecs[0])), // 8 bytes per uint64 (i think)
+        Op:       pb.ReduceOp_SUM,
+        MemAddrs: memAddrs,
+    })
+    if err != nil {
+        log.Fatalf("AllReduceRing failed: %v", err)
+    }
+
+    // Execute AllReduceRing (Part 2) --> 3x first 3 bytes
+    _, err = client.AllReduceRing(ctx, &pb.AllReduceRingRequest{
+        CommId:   commId,
+        Count:    uint64(8 * 3), // 8 bytes per uint64 (i think)
         Op:       pb.ReduceOp_SUM,
         MemAddrs: memAddrs,
     })
@@ -113,9 +158,11 @@ func main() {
             break
         }
     }
+    groupDuration := time.Since(groupStart)
+    log.Printf("Group operation took %v to complete", groupDuration)
 
-    // Loop through devices 0 to 3
-    for i := range 4 {
+    // Loop through devices 0 to N
+    for i := range N {
 
         // Perform the Memcpy operation for the current device
         memcpyResp, err := client.Memcpy(ctx, &pb.MemcpyRequest{
@@ -140,6 +187,5 @@ func main() {
         vecOut := utl.ByteArrayToFloat64Slice(deviceToHostResp.DeviceToHost.DstData)
 
         log.Printf("Received data from device %d: %v", i, vecOut)
-
     }
 }

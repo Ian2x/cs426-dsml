@@ -114,6 +114,7 @@ service GPUCoordinator {
 
   // RPCs for group or peer-to-peer communication
   rpc AllReduceRing(AllReduceRingRequest) returns (AllReduceRingResponse) {}
+  rpc AllReduce(AllReduceRequest) returns (AllReduceResponse) {} // WE ADDED
 
   // Host-to-device data transfer and vice versa
   // You may implement this as streaming as well
@@ -177,6 +178,18 @@ message AllReduceRingRequest {
 }
 
 message AllReduceRingResponse {
+  bool success = 1;
+}
+
+message AllReduceRequest {
+  uint64 commId = 1;
+  uint64 count = 2;
+  ReduceOp op = 3;
+  // Rank -> MemAddr; protobuf doesn't support message type keys or type aliases
+  map<uint32, MemAddr> memAddrs = 4;
+}
+
+message AllReduceResponse {
   bool success = 1;
 }
 

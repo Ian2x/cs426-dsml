@@ -51,6 +51,9 @@ services:
       context: .
       dockerfile: client/Dockerfile
     container_name: client
+    environment:
+      - TEST=${TEST}
+      - ALGO=${ALGO}
     depends_on:
       - coordinator
       - gpu_device_0

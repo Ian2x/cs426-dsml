@@ -10,6 +10,7 @@ import (
     "google.golang.org/grpc/metadata"
     "time"
     "log"
+    "math"
 
     utl "github.com/Ian2x/cs426-dsml/util"
 )
@@ -138,6 +139,7 @@ func (s *GpuCoordinatorServer) GroupStart(ctx context.Context, req *pb.GroupStar
     }
 
     communicator.groupStarted = true
+    communicator.status = pb.Status_IN_PROGRESS
 
     return &pb.GroupStartResponse{
         Success: true,
@@ -166,45 +168,42 @@ func (s *GpuCoordinatorServer) GroupEnd(ctx context.Context, req *pb.GroupEndReq
     communicator.groupStarted = false
     s.Mu.Unlock()
 
-    // Execute operations asynchronously
-    var wg sync.WaitGroup
-    errCh := make(chan error, len(queuedOps))
-
-    for _, op := range queuedOps {
-        wg.Add(1)
-        go func(op operation) {
-            defer wg.Done()
-
+    // Execute operations in-order, asynchronously
+    go func() {
+        errCh := make(chan error, len(queuedOps))
+        
+        for _, op := range queuedOps {
             switch op.opType {
                 case "AllReduceRing":
                     allReduceRingRequest := op.opReq.(*pb.AllReduceRingRequest)
                     if err := s.executeAllReduceRing(allReduceRingRequest); err != nil {
                         errCh <- err
                     }
+                case "AllReduce":
+                    allReduceRequest := op.opReq.(*pb.AllReduceRequest)
+                    if err := s.executeAllReduce(allReduceRequest); err != nil {
+                        errCh <- err
+                    }
                 // Other operations
                 default:
                     errCh <- fmt.Errorf("Unknown operation type: %v", op.opType)
             }
-        }(op)
-    }
-
-    go func() {
-        wg.Wait()
-        close(errCh)
-    }()
-
-    for err := range errCh {
-        if err != nil {
-            s.Mu.Lock()
-            communicator.status = pb.Status_FAILED
-            s.Mu.Unlock()
-            return nil, err
         }
-    }
 
-    s.Mu.Lock()
-    communicator.status = pb.Status_SUCCESS
-    s.Mu.Unlock()
+        close(errCh)
+
+        for err := range errCh {
+            if err != nil {
+                s.Mu.Lock()
+                communicator.status = pb.Status_FAILED
+                s.Mu.Unlock()
+                log.Printf("GroupEnd received error: %v", err)
+            }
+        }
+        s.Mu.Lock()
+        communicator.status = pb.Status_SUCCESS
+        s.Mu.Unlock()
+    }()
 
     return &pb.GroupEndResponse{
         Success: true,
@@ -234,6 +233,33 @@ func (s *GpuCoordinatorServer) AllReduceRing(ctx context.Context, req *pb.AllRed
     }
 
     return &pb.AllReduceRingResponse{
+        Success: true,
+    }, nil
+}
+
+func (s *GpuCoordinatorServer) AllReduce(ctx context.Context, req *pb.AllReduceRequest) (*pb.AllReduceResponse, error) {
+    s.Mu.Lock()
+
+    communicator, exists := s.Communicators[req.CommId]
+    if !exists {
+        s.Mu.Unlock()
+        return nil, fmt.Errorf("Communicator %d not found", req.CommId)
+    }
+    
+    if communicator.groupStarted { // If groupStarted, queue the operation.
+        communicator.opQueue = append(communicator.opQueue, operation{
+            opType: "AllReduce",
+            opReq:  req,
+        })
+        s.Mu.Unlock()
+    } else { // Else, executed immediately
+        s.Mu.Unlock()
+        if err := s.executeAllReduce(req); err != nil {
+            return nil, err
+        }
+    }
+
+    return &pb.AllReduceResponse{
         Success: true,
     }, nil
 }
@@ -328,7 +354,7 @@ func (s *GpuCoordinatorServer) beginShare(
 }
 
 func (s *GpuCoordinatorServer) executeAllReduceRing(req *pb.AllReduceRingRequest) error {
-    // get the communicator and number of devices
+    // Get the communicator and number of devices
     s.Mu.Lock()
     communicator := s.Communicators[req.CommId]
     if communicator == nil {
@@ -362,14 +388,15 @@ func (s *GpuCoordinatorServer) executeAllReduceRing(req *pb.AllReduceRingRequest
         }
     }()
 
-    // request fields
-    numBytes := req.Count
+    // Request fields
+    // Assumptions: arrays of 8 byte data (e.g. float64)
+    numBytes := uint64(math.Ceil((float64(req.Count) / 8 / float64(numDevices)))) * 8 * uint64(numDevices)
     op := req.Op
     memAddrs := req.MemAddrs
     bytesPerReq := numBytes / uint64(numDevices)
 
     // Error channel for both phases
-    errCh := make(chan error, 2 * numDevices)
+    errCh := make(chan error, 2 * (numDevices - 1))
     
     // begin allReduceRing
     for phase := uint32(0); phase < 2; phase++ {
@@ -384,16 +411,16 @@ func (s *GpuCoordinatorServer) executeAllReduceRing(req *pb.AllReduceRingRequest
 
         for i := uint32(0); i < numDevices - 1; i++ {
             log.Printf("STARTING PHASE %d, STEP %d", phase, i)
-            // initialize wait group
+
             var wg sync.WaitGroup
-            // node i sends, node i + 1 receives
-            // s.Mu.Lock()
             for rank := uint32(0); rank < numDevices; rank++ {
                 srcRank := uint32(rank % numDevices)
                 dstRank := uint32((rank + 1) % numDevices)
-                // calculate addrs for send and receive
+
+                // Calculate addrs for send and receive
                 srcBuffAddr := uint64(memAddrs[srcRank].Value + (bytesPerReq * uint64((srcRank + numDevices - i + phase) % numDevices)) % numBytes)
                 dstBuffAddr := uint64(memAddrs[dstRank].Value + (bytesPerReq * uint64((dstRank + 2 * numDevices - i - 1 + phase) % numDevices)) % numBytes)
+                
                 // invoke beginShare
                 wg.Add(1)
                 go s.beginShare(
@@ -403,17 +430,16 @@ func (s *GpuCoordinatorServer) executeAllReduceRing(req *pb.AllReduceRingRequest
                     reduceOp, errCh, &wg,
                 )
             }
-            // s.Mu.Unlock()
-            // wait for all shares to finish
             wg.Wait()
+
             // empty error channel and read errors
             DrainErrors:
             for {
                 select {
-                case err := <-errCh:
-                    log.Printf("Error in executeAllReduceRing: %v", err)
-                default:
-                    break DrainErrors
+                    case err := <-errCh:
+                        log.Printf("Error in executeAllReduceRing: %v", err)
+                    default:
+                        break DrainErrors
                 }
             }
         }
@@ -422,6 +448,90 @@ func (s *GpuCoordinatorServer) executeAllReduceRing(req *pb.AllReduceRingRequest
     
     return nil
 }
+
+func (s *GpuCoordinatorServer) executeAllReduce(req *pb.AllReduceRequest) error {
+    // Get the communicator and number of devices
+    s.Mu.Lock()
+    communicator := s.Communicators[req.CommId]
+    if communicator == nil {
+        s.Mu.Unlock()
+        return fmt.Errorf("Communicator %d not found", req.CommId)
+    }
+    deviceClients := make(map[uint32]pb.GPUDeviceClient)
+    conns := make(map[uint32]*grpc.ClientConn)
+    numDevices := uint32(len(communicator.devices))
+
+    opts := []grpc.DialOption{
+        grpc.WithTransportCredentials(insecure.NewCredentials()),
+    }
+
+    for rank, deviceConfig := range communicator.devices {
+        target := fmt.Sprintf("%s:%d", deviceConfig.IPAddress, deviceConfig.Port)
+        conn, err := grpc.NewClient(target, opts...)
+        if err != nil {
+            s.Mu.Unlock()
+            return fmt.Errorf("could not create gRPC client for rank=%d device=%d: %v", rank, deviceConfig.DeviceID, err)
+        }
+        conns[rank] = conn
+        deviceClients[rank] = pb.NewGPUDeviceClient(conn)
+    }
+    s.Mu.Unlock()
+
+    // Close connections
+    defer func() {
+        for _, c := range conns {
+            c.Close()
+        }
+    }()
+
+    // Request fields
+    // Assumptions: arrays of 8 byte data (e.g. float64)
+    numBytes := uint64(math.Ceil((float64(req.Count) / 8))) * 8
+    op := req.Op
+    memAddrs := req.MemAddrs
+
+    // Error channel for all msgs
+    errCh := make(chan error, numDevices * (numDevices - 1))
+
+    // begin allReduce
+    var wg sync.WaitGroup
+    for srcRank := uint32(0); srcRank < numDevices; srcRank++ {
+        for dstRank := uint32(0); dstRank < numDevices; dstRank++ {
+            if srcRank == dstRank {
+                continue
+            }
+            
+            srcBuffAddr := uint64(memAddrs[srcRank].Value)
+            dstBuffAddr := uint64(memAddrs[dstRank].Value)
+
+            wg.Add(1)
+            go s.beginShare(
+                srcRank, srcBuffAddr,
+                dstRank, dstBuffAddr,
+                numBytes, deviceClients,
+                op, errCh, &wg,
+            )
+        }
+    }
+
+    wg.Wait()
+
+    // empty error channel and read errors
+    DrainErrors:
+    for {
+        select {
+            case err := <-errCh:
+                log.Printf("Error in executeAllReduce: %v", err)
+            default:
+                break DrainErrors
+        }
+    }
+
+    close(errCh)
+
+    return nil
+}
+
 
 func (s *GpuCoordinatorServer) Memcpy(ctx context.Context, req *pb.MemcpyRequest) (*pb.MemcpyResponse, error) {
     switch op := req.Either.(type) {
