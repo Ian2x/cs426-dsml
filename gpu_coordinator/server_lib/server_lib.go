@@ -136,6 +136,48 @@ func (s *GpuCoordinatorServer) CommInit(ctx context.Context, req *pb.CommInitReq
     }, nil
 }
 
+func (s *GpuCoordinatorServer) CommRemoveDevice(ctx context.Context, req *pb.CommRemoveDeviceRequest) (*pb.CommRemoveDeviceResponse, error) {
+    s.Mu.Lock()
+    defer s.Mu.Unlock()
+    // req arguments
+    commId := req.CommId
+    rank := req.Rank.Value
+    // check if comm exists
+    comm, exists := s.Communicators[commId]
+    if !exists {
+        return nil, fmt.Errorf("Communicator %d not found", commId)
+    }
+    if len(comm.rankToDeviceId) <= 1 {
+        return nil, fmt.Errorf("Communicator %d only has %d devices", commId, len(comm.rankToDeviceId))
+    }
+    // remove device rank
+    delete(comm.rankToDeviceId, rank)
+    // get all deviceIds of communicator
+    ids := make([]uint64, 0)
+    for _, id := range comm.rankToDeviceId {
+        ids = append(ids, id)
+    }
+    // create new rank to id mapping
+    comm.rankToDeviceId = make(map[uint32]uint64)
+    for i := uint32(0); i < uint32(len(ids)); i++ {
+        comm.rankToDeviceId[i] = ids[i]
+    }
+    // create devicesMetadata
+    var devicesMetadata []*pb.DeviceMetadata
+    for _, deviceId := range comm.rankToDeviceId {
+        devicesMetadata = append(devicesMetadata, &pb.DeviceMetadata{
+            DeviceId:   &pb.DeviceId{Value: deviceId},
+            MinMemAddr: &pb.MemAddr{Value: s.Devices[deviceId].MinMemAddr},
+            MaxMemAddr: &pb.MemAddr{Value: s.Devices[deviceId].MaxMemAddr},
+        })
+    }
+    // return
+    return &pb.CommRemoveDeviceResponse{
+        Success: true,
+        Devices: devicesMetadata,
+    }, nil
+}
+
 func (s *GpuCoordinatorServer) GetCommStatus(ctx context.Context, req *pb.GetCommStatusRequest) (*pb.GetCommStatusResponse, error) {
     s.Mu.RLock()
     defer s.Mu.RUnlock()
@@ -620,7 +662,7 @@ func (s *GpuCoordinatorServer) handleErrors(errs []*utl.DeviceError, comm *commu
         s.DeviceHealth[id] = false
         // remove from communicator
         log.Printf("Would remove unhealthy %d from communicator", id)
-        // delete(comm.rankToDeviceId, err.Rank)
+        delete(comm.rankToDeviceId, err.Rank)
     }
     // get all deviceIds of communicator
     ids := make([]uint64, 0)

@@ -112,11 +112,26 @@ message HeartbeatResponse {
   bool success = 1;
 }
 
+// ADDED:
+message CommRemoveDeviceRequest {
+  uint64 commId = 1;
+  Rank rank = 2;
+}
+
+// ADDED:
+message CommRemoveDeviceResponse {
+  bool success = 1;
+  repeated DeviceMetadata devices = 2;
+}
+
 // A service that simulates a coordinator that manages multiple GPU devices
 service GPUCoordinator {
   rpc CommInit(CommInitRequest) returns (CommInitResponse) {}
   rpc GetCommStatus(GetCommStatusRequest) returns (GetCommStatusResponse) {}
   // You may choose to implement CommFinalize and CommDestroy RPCs
+
+  // ADDED:
+  rpc CommRemoveDevice(CommRemoveDeviceRequest) returns (CommRemoveDeviceResponse) {}
 
   // Group operations wrapper
   rpc GroupStart(GroupStartRequest) returns (GroupStartResponse) {}

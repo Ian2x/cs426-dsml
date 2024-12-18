@@ -4,7 +4,7 @@ import (
     "context"
     "log"
     "time"
-    // "math"
+    "math/rand"
     "os"
 	"strconv"
 
@@ -46,6 +46,22 @@ func main() {
             {9, 10, 11, 12, 13, 14, 15, 16},
             {17, 18, 19, 20, 21, 22, 23, 24},
         }
+    case 1:
+        N = 4
+        vecs = [][]float64{
+            {1, 2, 3, 4, 5, 6, 7, 8},
+            {9, 10, 11, 12, 13, 14, 15, 16},
+            {17, 18, 19, 20, 21, 22, 23, 24},
+            {25, 26, 27, 28, 29, 30, 31, 32},
+        }
+    case 2:
+        N = 4
+        vecs = [][]float64{
+            {1, 2, 3, 4, 5, 6, 7, 8},
+            {9, 10, 11, 12, 13, 14, 15, 16},
+            {17, 18, 19, 20, 21, 22, 23, 24},
+            {25, 26, 27, 28, 29, 30, 31, 32},
+        }
     default:
         N = 2
         vecs = [][]float64{
@@ -78,6 +94,26 @@ func main() {
     }
     commId := commInitResp.CommId
     devices := commInitResp.Devices
+
+    // remove a device before group starts
+    if test == 1 {
+        randomIndex := uint32(rand.Intn(len(devices)))
+        commRemoveResp, err := client.CommRemoveDevice(
+            context.Background(),
+            &pb.CommRemoveDeviceRequest{
+                CommId: commId,
+                Rank: &pb.Rank{Value: randomIndex},
+            },
+        )
+        if err != nil {
+            log.Fatalf("CommRemoveDevice failed: %v", err)
+        }
+        if !commRemoveResp.Success {
+            log.Fatalf("CommRemoveDevice was unsuccessful")
+        }
+        devices = commRemoveResp.Devices
+        N = N - 1
+    }
 
     // Memcpy vectors to each GPU
     for i := 0; i < N; i++ {

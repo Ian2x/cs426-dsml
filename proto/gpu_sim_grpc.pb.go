@@ -355,14 +355,15 @@ var GPUDevice_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	GPUCoordinator_CommInit_FullMethodName      = "/gpu_sim.GPUCoordinator/CommInit"
-	GPUCoordinator_GetCommStatus_FullMethodName = "/gpu_sim.GPUCoordinator/GetCommStatus"
-	GPUCoordinator_GroupStart_FullMethodName    = "/gpu_sim.GPUCoordinator/GroupStart"
-	GPUCoordinator_GroupEnd_FullMethodName      = "/gpu_sim.GPUCoordinator/GroupEnd"
-	GPUCoordinator_AllReduceRing_FullMethodName = "/gpu_sim.GPUCoordinator/AllReduceRing"
-	GPUCoordinator_AllReduce_FullMethodName     = "/gpu_sim.GPUCoordinator/AllReduce"
-	GPUCoordinator_Memcpy_FullMethodName        = "/gpu_sim.GPUCoordinator/Memcpy"
-	GPUCoordinator_Heartbeat_FullMethodName     = "/gpu_sim.GPUCoordinator/Heartbeat"
+	GPUCoordinator_CommInit_FullMethodName         = "/gpu_sim.GPUCoordinator/CommInit"
+	GPUCoordinator_GetCommStatus_FullMethodName    = "/gpu_sim.GPUCoordinator/GetCommStatus"
+	GPUCoordinator_CommRemoveDevice_FullMethodName = "/gpu_sim.GPUCoordinator/CommRemoveDevice"
+	GPUCoordinator_GroupStart_FullMethodName       = "/gpu_sim.GPUCoordinator/GroupStart"
+	GPUCoordinator_GroupEnd_FullMethodName         = "/gpu_sim.GPUCoordinator/GroupEnd"
+	GPUCoordinator_AllReduceRing_FullMethodName    = "/gpu_sim.GPUCoordinator/AllReduceRing"
+	GPUCoordinator_AllReduce_FullMethodName        = "/gpu_sim.GPUCoordinator/AllReduce"
+	GPUCoordinator_Memcpy_FullMethodName           = "/gpu_sim.GPUCoordinator/Memcpy"
+	GPUCoordinator_Heartbeat_FullMethodName        = "/gpu_sim.GPUCoordinator/Heartbeat"
 )
 
 // GPUCoordinatorClient is the client API for GPUCoordinator service.
@@ -373,6 +374,8 @@ const (
 type GPUCoordinatorClient interface {
 	CommInit(ctx context.Context, in *CommInitRequest, opts ...grpc.CallOption) (*CommInitResponse, error)
 	GetCommStatus(ctx context.Context, in *GetCommStatusRequest, opts ...grpc.CallOption) (*GetCommStatusResponse, error)
+	// ADDED:
+	CommRemoveDevice(ctx context.Context, in *CommRemoveDeviceRequest, opts ...grpc.CallOption) (*CommRemoveDeviceResponse, error)
 	// Group operations wrapper
 	GroupStart(ctx context.Context, in *GroupStartRequest, opts ...grpc.CallOption) (*GroupStartResponse, error)
 	GroupEnd(ctx context.Context, in *GroupEndRequest, opts ...grpc.CallOption) (*GroupEndResponse, error)
@@ -408,6 +411,16 @@ func (c *gPUCoordinatorClient) GetCommStatus(ctx context.Context, in *GetCommSta
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetCommStatusResponse)
 	err := c.cc.Invoke(ctx, GPUCoordinator_GetCommStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gPUCoordinatorClient) CommRemoveDevice(ctx context.Context, in *CommRemoveDeviceRequest, opts ...grpc.CallOption) (*CommRemoveDeviceResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CommRemoveDeviceResponse)
+	err := c.cc.Invoke(ctx, GPUCoordinator_CommRemoveDevice_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -482,6 +495,8 @@ func (c *gPUCoordinatorClient) Heartbeat(ctx context.Context, in *HeartbeatReque
 type GPUCoordinatorServer interface {
 	CommInit(context.Context, *CommInitRequest) (*CommInitResponse, error)
 	GetCommStatus(context.Context, *GetCommStatusRequest) (*GetCommStatusResponse, error)
+	// ADDED:
+	CommRemoveDevice(context.Context, *CommRemoveDeviceRequest) (*CommRemoveDeviceResponse, error)
 	// Group operations wrapper
 	GroupStart(context.Context, *GroupStartRequest) (*GroupStartResponse, error)
 	GroupEnd(context.Context, *GroupEndRequest) (*GroupEndResponse, error)
@@ -508,6 +523,9 @@ func (UnimplementedGPUCoordinatorServer) CommInit(context.Context, *CommInitRequ
 }
 func (UnimplementedGPUCoordinatorServer) GetCommStatus(context.Context, *GetCommStatusRequest) (*GetCommStatusResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetCommStatus not implemented")
+}
+func (UnimplementedGPUCoordinatorServer) CommRemoveDevice(context.Context, *CommRemoveDeviceRequest) (*CommRemoveDeviceResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CommRemoveDevice not implemented")
 }
 func (UnimplementedGPUCoordinatorServer) GroupStart(context.Context, *GroupStartRequest) (*GroupStartResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GroupStart not implemented")
@@ -580,6 +598,24 @@ func _GPUCoordinator_GetCommStatus_Handler(srv interface{}, ctx context.Context,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(GPUCoordinatorServer).GetCommStatus(ctx, req.(*GetCommStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GPUCoordinator_CommRemoveDevice_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CommRemoveDeviceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GPUCoordinatorServer).CommRemoveDevice(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GPUCoordinator_CommRemoveDevice_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GPUCoordinatorServer).CommRemoveDevice(ctx, req.(*CommRemoveDeviceRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -706,6 +742,10 @@ var GPUCoordinator_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetCommStatus",
 			Handler:    _GPUCoordinator_GetCommStatus_Handler,
+		},
+		{
+			MethodName: "CommRemoveDevice",
+			Handler:    _GPUCoordinator_CommRemoveDevice_Handler,
 		},
 		{
 			MethodName: "GroupStart",
