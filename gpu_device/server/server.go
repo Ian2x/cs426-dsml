@@ -23,6 +23,7 @@ var (
 )
 
 type Config struct {
+    Coordinator utl.CoordinatorConfig `json:"coordinator"`
     Devices []utl.DeviceConfig `json:"devices"`
 }
 
@@ -63,6 +64,7 @@ func main() {
 
     // Get deviceConfigs
     deviceConfigs := config.Devices
+    coordinatorConfig := config.Coordinator
 
     // Process all the deviceConfigs
     var ownConfig *utl.DeviceConfig
@@ -92,7 +94,7 @@ func main() {
 
     s := grpc.NewServer()
 	
-    pb.RegisterGPUDeviceServer(s, sl.MakeGPUDeviceServer(uint64(*deviceID), peers))
+    pb.RegisterGPUDeviceServer(s, sl.MakeGPUDeviceServer(uint64(*deviceID), coordinatorConfig, peers))
 
 	log.Printf("GPU Device server (device ID: %d) listening at %v", *deviceID, lis.Addr())
 

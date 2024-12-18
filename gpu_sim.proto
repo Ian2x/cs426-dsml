@@ -102,6 +102,16 @@ message GetStreamStatusResponse {
   Status status = 1;
 }
 
+// ADDED:
+message HeartbeatRequest {
+  uint64 deviceId = 1;
+}
+
+// ADDED:
+message HeartbeatResponse {
+  bool success = 1;
+}
+
 // A service that simulates a coordinator that manages multiple GPU devices
 service GPUCoordinator {
   rpc CommInit(CommInitRequest) returns (CommInitResponse) {}
@@ -119,6 +129,9 @@ service GPUCoordinator {
   // Host-to-device data transfer and vice versa
   // You may implement this as streaming as well
   rpc Memcpy(MemcpyRequest) returns (MemcpyResponse) {}
+
+  // ADDED: heartbeat from device to coordinator
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse) {}
 }
 
 // Create a new communicator with a number of GPUs

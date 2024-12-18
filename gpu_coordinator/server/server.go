@@ -20,6 +20,7 @@ var (
 )
 
 type Config struct {
+    Coordinator utl.CoordinatorConfig `json:"coordinator"`
     Devices []utl.DeviceConfig `json:"devices"`
 }
 
@@ -49,17 +50,16 @@ func main() {
     gpuCoordinatorServer := sl.MakeGPUCoordinatorServer()
 
     // Process all the deviceConfigs
-    for i, deviceConfig := range deviceConfigs {
-        rank := uint32(i)
+    for _, deviceConfig := range deviceConfigs {
         deviceConfig.MinMemAddr = 0
         deviceConfig.MaxMemAddr = 1024 * 1024 // 1 MB memory
 
         gpuCoordinatorServer.Devices[deviceConfig.DeviceID] = &deviceConfig
-        gpuCoordinatorServer.RankToDeviceID[rank] = deviceConfig.DeviceID
     }
 
     // Start the gRPC server
-    lis, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
+    lis, err := net.Listen("tcp", fmt.Sprintf(":%d", config.Coordinator.Port))
+    // lis, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
     if err != nil {
         log.Fatalf("Failed to listen: %v", err)
     }

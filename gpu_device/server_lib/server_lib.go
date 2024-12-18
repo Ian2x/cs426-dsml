@@ -29,6 +29,8 @@ type gpuDeviceServer struct {
     memory          []byte
 
     // Other state
+    coordinator         *utl.CoordinatorConfig
+    coordinatorConn     *grpc.ClientConn
     peers               map[uint32]*PeerInfo
     nextStreamIndex     uint64
     streams             map[uint64]*streamInfo
@@ -59,12 +61,25 @@ type streamInfo struct {
     dstRank       uint32
 }
 
-func MakeGPUDeviceServer(deviceID uint64, peers map[uint32]*PeerInfo) *gpuDeviceServer{
+func MakeGPUDeviceServer(deviceID uint64, coordinatorConfig utl.CoordinatorConfig, peers map[uint32]*PeerInfo) *gpuDeviceServer{
+    // establish connection with coordinator
+    opts := []grpc.DialOption{
+        grpc.WithTransportCredentials(insecure.NewCredentials()),
+    }
+    target := fmt.Sprintf("%s:%d", coordinatorConfig.IPAddress, coordinatorConfig.Port)
+    conn, err := grpc.NewClient(target, opts...)
+    if err != nil {
+        log.Printf("could not create gRPC client for GPUCoordinator on device=%d: %v", deviceID, err)
+        return nil
+    }
+
     server := gpuDeviceServer{
         deviceId:           deviceID,
         minMemAddr:         0,
         maxMemAddr:         1024 * 1024, // 1 MB memory
         memory:             make([]byte, 1024*1024),
+        coordinator:        &coordinatorConfig,
+        coordinatorConn:    conn,
         peers:              peers, // Read in from config files
         nextStreamIndex:    1,
         streams:            make(map[uint64]*streamInfo),
@@ -74,6 +89,8 @@ func MakeGPUDeviceServer(deviceID uint64, peers map[uint32]*PeerInfo) *gpuDevice
 
     // Start processing operations
     go server.processOperations()
+    // ADDED: start sending heartbeats to coordinator
+    go server.sendHeartbeats()
 
     return &server
 }
@@ -328,6 +345,24 @@ func (s *gpuDeviceServer) MemcpyDeviceToHost(req *pb.MemcpyDeviceToHostRequest, 
     return nil
 }
 
+func (s *gpuDeviceServer) sendHeartbeats() {
+    // create client
+    client := pb.NewGPUCoordinatorClient(s.coordinatorConn)
+    // loop
+    for {
+        if !s.isHealthy {
+            log.Printf("Server is unhealthy, stopping sendHeartbeats")
+            return
+        }
+        // send heartbeat
+        client.Heartbeat( // heartbeatResp, err
+            context.Background(),
+            &pb.HeartbeatRequest{DeviceId: s.deviceId},
+        )
+        // sleep
+        time.Sleep(100 * time.Millisecond)
+    }
+}
 
 func (s *gpuDeviceServer) processOperations() {
     for {
