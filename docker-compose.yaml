@@ -46,6 +46,69 @@ services:
       - "9004:9004"
     command: ["./gpu_device_server", "--device_id=3", "--config_file=/app/config.json"]
 
+  gpu_device_4:
+    build:
+      context: .
+      dockerfile: gpu_device/Dockerfile
+    container_name: device4
+    ports:
+      - "9005:9005"
+    command: ["./gpu_device_server", "--device_id=4", "--config_file=/app/config.json"]
+  
+  gpu_device_5:
+    build:
+      context: .
+      dockerfile: gpu_device/Dockerfile
+    container_name: device5
+    ports:
+      - "9006:9006"
+    command: ["./gpu_device_server", "--device_id=5", "--config_file=/app/config.json"]
+  
+  gpu_device_6:
+    build:
+      context: .
+      dockerfile: gpu_device/Dockerfile
+    container_name: device6
+    ports:
+      - "9007:9007"
+    command: ["./gpu_device_server", "--device_id=6", "--config_file=/app/config.json"]
+  
+  gpu_device_7:
+    build:
+      context: .
+      dockerfile: gpu_device/Dockerfile
+    container_name: device7
+    ports:
+      - "9008:9008"
+    command: ["./gpu_device_server", "--device_id=7", "--config_file=/app/config.json"]
+  
+  gpu_device_8:
+    build:
+      context: .
+      dockerfile: gpu_device/Dockerfile
+    container_name: device8
+    ports:
+      - "9009:9009"
+    command: ["./gpu_device_server", "--device_id=8", "--config_file=/app/config.json"]
+  
+  gpu_device_9:
+    build:
+      context: .
+      dockerfile: gpu_device/Dockerfile
+    container_name: device9
+    ports:
+      - "9010:9010"
+    command: ["./gpu_device_server", "--device_id=9", "--config_file=/app/config.json"]
+  
+  gpu_device_10:
+    build:
+      context: .
+      dockerfile: gpu_device/Dockerfile
+    container_name: device10
+    ports:
+      - "9011:9011"
+    command: ["./gpu_device_server", "--device_id=10", "--config_file=/app/config.json"]
+
   client:
     build:
       context: .

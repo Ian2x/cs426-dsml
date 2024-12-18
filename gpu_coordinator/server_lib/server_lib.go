@@ -215,15 +215,17 @@ func (s *GpuCoordinatorServer) executeOps(queuedOps []operation, comm *communica
                 allReduceRingRequest := op.opReq.(*pb.AllReduceRingRequest)
                 if err := s.executeAllReduceRing(allReduceRingRequest); err != nil {
                     return
-                    // errCh <- err
                 }
             case "AllReduce":
                 allReduceRequest := op.opReq.(*pb.AllReduceRequest)
                 if err := s.executeAllReduce(allReduceRequest); err != nil {
                     return
-                    // errCh <- err
                 }
-            // Other operations
+            case "TreePacking":
+                treePackingRequest := op.opReq.(*pb.TreePackingRequest)
+                if err := s.executeTreePacking(treePackingRequest); err != nil {
+                    return
+                }
             default:
                 errCh <- fmt.Errorf("Unknown operation type: %v", op.opType)
         }
@@ -296,6 +298,34 @@ func (s *GpuCoordinatorServer) AllReduce(ctx context.Context, req *pb.AllReduceR
     }
 
     return &pb.AllReduceResponse{
+        Success: true,
+    }, nil
+}
+
+func (s *GpuCoordinatorServer) TreePacking(ctx context.Context, req *pb.TreePackingRequest) (*pb.TreePackingResponse, error) {
+    s.Mu.RLock()
+    communicator, exists := s.Communicators[req.CommId]
+    if !exists {
+        s.Mu.RUnlock()
+        return nil, fmt.Errorf("Communicator %d not found", req.CommId)
+    }
+    s.Mu.RUnlock()
+    
+    s.Mu.Lock()
+    if communicator.groupStarted { // If groupStarted, queue the operation.
+        communicator.opQueue = append(communicator.opQueue, operation{
+            opType: "TreePacking",
+            opReq:  req,
+        })
+        s.Mu.Unlock()
+    } else { // Else, executed immediately
+        s.Mu.Unlock()
+        if err := s.executeTreePacking(req); err != nil {
+            return nil, err
+        }
+    }
+
+    return &pb.TreePackingResponse{
         Success: true,
     }, nil
 }
@@ -525,12 +555,19 @@ func (s *GpuCoordinatorServer) executeAllReduceRing(req *pb.AllReduceRingRequest
 
 func (s *GpuCoordinatorServer) executeAllReduce(req *pb.AllReduceRequest) error {
     // Get the communicator and number of devices
-    s.Mu.Lock()
+    s.Mu.RLock()
     communicator := s.Communicators[req.CommId]
     if communicator == nil {
-        s.Mu.Unlock()
+        s.Mu.RUnlock()
         return fmt.Errorf("Communicator %d not found", req.CommId)
     }
+    if len(communicator.rankToDeviceId) <= 1 {
+        s.Mu.RUnlock()
+        return fmt.Errorf("Communicator has less than 2 devices")
+    }
+    s.Mu.RUnlock()
+
+    s.Mu.Lock()
     deviceClients := make(map[uint32]pb.GPUDeviceClient)
     conns := make(map[uint32]*grpc.ClientConn)
     numDevices := uint32(len(communicator.rankToDeviceId))
@@ -539,20 +576,22 @@ func (s *GpuCoordinatorServer) executeAllReduce(req *pb.AllReduceRequest) error 
         grpc.WithTransportCredentials(insecure.NewCredentials()),
     }
 
+    // for rank, deviceConfig := range communicator.devices {
     for rank, deviceId := range communicator.rankToDeviceId {
-        deviceConfig := s.Devices[deviceId]
-        target := fmt.Sprintf("%s:%d", deviceConfig.IPAddress, deviceConfig.Port)
+        // target := fmt.Sprintf("%s:%d", deviceConfig.IPAddress, deviceConfig.Port)
+        config := s.Devices[deviceId]
+        target := fmt.Sprintf("%s:%d", config.IPAddress, config.Port)
         conn, err := grpc.NewClient(target, opts...)
         if err != nil {
             s.Mu.Unlock()
-            return fmt.Errorf("could not create gRPC client for rank=%d device=%d: %v", rank, deviceConfig.DeviceID, err)
+            return fmt.Errorf("could not create gRPC client for rank=%d device=%d: %v", rank, deviceId, err)
         }
         conns[rank] = conn
         deviceClients[rank] = pb.NewGPUDeviceClient(conn)
     }
     s.Mu.Unlock()
 
-    // Close connections
+    // defer close connections
     defer func() {
         for _, c := range conns {
             c.Close()
@@ -561,24 +600,94 @@ func (s *GpuCoordinatorServer) executeAllReduce(req *pb.AllReduceRequest) error 
 
     // Request fields
     // Assumptions: arrays of 8 byte data (e.g. float64)
-    numBytes := uint64(math.Ceil((float64(req.Count) / 8))) * 8
+    numBytes := uint64(math.Ceil((float64(req.Count) / 8 / float64(numDevices)))) * 8 * uint64(numDevices)
     op := req.Op
     memAddrs := req.MemAddrs
 
-    // Error channel for all msgs
-    errCh := make(chan *utl.DeviceError, numDevices * (numDevices - 1))
+    s.Mu.RLock()
+    for rank := range communicator.rankToDeviceId {
+        // read in device memory and store it
+        stream, err := deviceClients[rank].MemcpyDeviceToHost(
+            context.Background(),
+            &pb.MemcpyDeviceToHostRequest{
+                SrcDeviceId: &pb.DeviceId{Value: communicator.rankToDeviceId[rank]},
+                SrcMemAddr: memAddrs[rank],
+                NumBytes: numBytes,
+            },
+        )
+        if err != nil {
+            fmt.Printf("Error starting MemcpyDeviceToHost: %v\n", err)
+            return err
+        }
+        var result []byte
+        for {
+            chunk, err := stream.Recv()
+            if err == io.EOF {
+                break
+            }
+            if err != nil {
+                fmt.Printf("Error receiving data chunk: %v\n", err)
+                return err
+            }
+            result = append(result, chunk.Data...)
+        }
+        communicator.deviceMem[rank] = result
+    }
+    s.Mu.RUnlock()
 
-    // begin allReduce
+    // Error channel for all phases
+    errCh := make(chan *utl.DeviceError, numDevices * (numDevices - 1) + 3 * numDevices)
+    errs := make([]*utl.DeviceError, 0)
+    defer close(errCh)
+
+    // Phase 1: clear space
     var wg sync.WaitGroup
+    for dstRank := uint32(0); dstRank < numDevices; dstRank++ {
+        wg.Add(1)
+        go func() {
+            defer wg.Done()
+            _, err := s.Memcpy(context.Background(), &pb.MemcpyRequest{
+                Either: &pb.MemcpyRequest_HostToDevice{
+                    HostToDevice: &pb.MemcpyHostToDeviceRequest{
+                        HostSrcData: make([]byte, numBytes),
+                        DstDeviceId: &pb.DeviceId{Value: communicator.rankToDeviceId[dstRank]},
+                        DstMemAddr:  &pb.MemAddr{Value: uint64(memAddrs[dstRank].Value + numBytes)},
+                    },
+                },
+            })
+            if err != nil {
+                errCh <- utl.DeviceErrorf("Allreduce phase 1 failed", dstRank)
+            }
+        } ()
+    }
+
+    wg.Wait()
+
+    // empty error channel and read errors
+    DrainErrors:
+    for {
+        select {
+        case err := <-errCh:
+            errs = append(errs, err)
+        default:
+            break DrainErrors
+        }
+    }
+    if len(errs) > 0 {
+        s.handleErrors(errs, communicator)
+        return fmt.Errorf("At least one device unresponsive... Restarting.")
+    }
+
+    // Phase 2: move data around
     for srcRank := uint32(0); srcRank < numDevices; srcRank++ {
         for dstRank := uint32(0); dstRank < numDevices; dstRank++ {
             if srcRank == dstRank {
                 continue
             }
-            
             srcBuffAddr := uint64(memAddrs[srcRank].Value)
-            dstBuffAddr := uint64(memAddrs[dstRank].Value)
+            dstBuffAddr := uint64(memAddrs[dstRank].Value + numBytes)
 
+            // invoke beginShare
             wg.Add(1)
             go s.beginShare(
                 srcRank, srcBuffAddr,
@@ -589,24 +698,91 @@ func (s *GpuCoordinatorServer) executeAllReduce(req *pb.AllReduceRequest) error 
             )
         }
     }
-
+    
     wg.Wait()
 
     // empty error channel and read errors
-    errs := make([]*utl.DeviceError, 0)
-    DrainErrors:
+    DrainErrors2:
     for {
         select {
         case err := <-errCh:
             errs = append(errs, err)
         default:
-            break DrainErrors
+            break DrainErrors2
         }
     }
-    s.handleErrors(errs, communicator)
+    if len(errs) > 0 {
+        s.handleErrors(errs, communicator)
+        return fmt.Errorf("At least one device unresponsive... Restarting.")
+    }
 
-    close(errCh)
+    // Phase 3: Read results and reprint
+    for gpuRank := uint32(0); gpuRank < numDevices; gpuRank++ {
+        wg.Add(1)
+        go func() {
+            defer wg.Done()
+            // get data
+            memcpyResp, err := s.Memcpy(context.Background(), &pb.MemcpyRequest{
+                Either: &pb.MemcpyRequest_DeviceToHost{
+                    DeviceToHost: &pb.MemcpyDeviceToHostRequest{
+                        NumBytes: 2 * numBytes,
+                        SrcDeviceId: &pb.DeviceId{Value: communicator.rankToDeviceId[gpuRank]},
+                        SrcMemAddr:  &pb.MemAddr{Value: uint64(memAddrs[gpuRank].Value)},
+                    },
+                },
+            })
+            if err != nil {
+                errCh <- utl.DeviceErrorf("Allreduce phase 3 failed", gpuRank)
+            }
+            deviceToHostResp, ok := memcpyResp.Either.(*pb.MemcpyResponse_DeviceToHost)
+            if !ok {
+                errCh <- utl.DeviceErrorf("Allreduce phase 3 failed", gpuRank)
+            }
+            vecOut := utl.ByteArrayToFloat64Slice(deviceToHostResp.DeviceToHost.DstData)
+            offset := len(vecOut) / 2
+            for i := range(offset) { // assume even split
+                vecOut[i] += vecOut[offset + i]
+                vecOut[offset + i] = 0
+            }
 
+            // move it back
+            _, err = s.Memcpy(context.Background(), &pb.MemcpyRequest{
+                Either: &pb.MemcpyRequest_HostToDevice{
+                    HostToDevice: &pb.MemcpyHostToDeviceRequest{
+                        HostSrcData: utl.Float64SliceToByteArray(vecOut),
+                        DstDeviceId: &pb.DeviceId{Value: communicator.rankToDeviceId[gpuRank]},
+                        DstMemAddr:  &pb.MemAddr{Value: uint64(memAddrs[gpuRank].Value)},
+                    },
+                },
+            })
+            if err != nil {
+                errCh <- utl.DeviceErrorf("Allreduce phase 1 failed", gpuRank)
+            }
+        } ()
+    }
+
+    wg.Wait()
+
+    // empty error channel and read errors
+    DrainErrors3:
+    for {
+        select {
+        case err := <-errCh:
+            errs = append(errs, err)
+        default:
+            break DrainErrors3
+        }
+    }
+    if len(errs) > 0 {
+        s.handleErrors(errs, communicator)
+        return fmt.Errorf("At least one device unresponsive... Restarting.")
+    }
+
+    // whew
+    return nil
+}
+
+func (s *GpuCoordinatorServer) executeTreePacking(req *pb.TreePackingRequest) error {
     return nil
 }
 

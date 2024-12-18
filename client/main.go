@@ -15,43 +15,96 @@ import (
     "google.golang.org/grpc/credentials/insecure"
 )
 
+func reduce(client pb.GPUCoordinatorClient, algo string, ctx context.Context, commId uint64, count uint64, op pb.ReduceOp, memAddrs map[uint32]*pb.MemAddr) {
+    var err error
+    switch algo {
+    // case "treepacking":
+    case "allreduce":
+        _, err = client.AllReduce(ctx, &pb.AllReduceRequest{
+            CommId:   commId,
+            Count:    count,
+            Op:       op,
+            MemAddrs: memAddrs,
+        })
+    default:
+        _, err = client.AllReduceRing(ctx, &pb.AllReduceRingRequest{
+            CommId:   commId,
+            Count:    count,
+            Op:       op,
+            MemAddrs: memAddrs,
+        })
+    }
+    if err != nil {
+        log.Fatalf("%s failed: %v", algo, err)
+    }
+}
+
 func main() {
     // Parse TEST and ALGO
     testStr := os.Getenv("TEST")
-	if testStr == "" {
-		log.Printf("TEST not set -> using default value 0")
-		testStr = "0"
-	}
 	test, err := strconv.Atoi(testStr)
 	if err != nil {
-		log.Printf("Invalid TEST value: %s -> using default value 0", testStr)
 		test = 0
 	}
+    switch test {
+    case 1, 2:
+    default:
+        log.Printf("TEST not properly set -> using default value (1)")
+        test = 1
+    }
     algo := os.Getenv("ALGO")
-	if algo == "" {
-		log.Printf("ALGO not set -> using default value allringreduce")
-		algo = "allringreduce"
-	}
+    switch algo {
+    case "allreduce", "allreducering", "treepacking":
+    default:
+        log.Printf("ALGO not properly set -> using default value (allreducering)")
+        algo = "allreducering"
+    }
 
 	// Define variables
 	var N int
 	var vecs [][]float64
+    var ops []pb.ReduceOp
 
 	// Which test to run
 	switch test {
-    case 0:
+    case 1:
+        N = 10
+        vecs = [][]float64{
+            {1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
+            {1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
+            {1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
+            {1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
+            {1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
+            {1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
+            {1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
+            {1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
+            {1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
+            {1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
+        }
+        ops = []pb.ReduceOp{pb.ReduceOp_SUM}
+    case 2:
         N = 3
         vecs = [][]float64{
-            {1, 2, 3, 4, 5, 6, 7, 8},
-            {9, 10, 11, 12, 13, 14, 15, 16},
-            {17, 18, 19, 20, 21, 22, 23, 24},
+            {0, 1, 3, 9, 27},
+            {0, 1, 3, 9, 27},
+            {0, 1, 3, 9, 27},
         }
+        ops = []pb.ReduceOp{pb.ReduceOp_SUM, pb.ReduceOp_SUM}
+    case 3:
+        N = 3
+        vecs = [][]float64{
+            {1, 6, 7},
+            {2, 5, 8},
+            {3, 4, 9},
+        }
+        ops = []pb.ReduceOp{pb.ReduceOp_MIN, pb.ReduceOp_SUM}
     default:
         N = 2
         vecs = [][]float64{
             {1, 2},
             {3, 4},
         }
+        ops = []pb.ReduceOp{pb.ReduceOp_PROD} // sum, prod, min, max
     }
 
     // Connect to GPU Coordinator
@@ -98,7 +151,7 @@ func main() {
         }
     }
 
-    // Start the group
+    // Prepare the group
     groupStart := time.Now()
     _, err = client.GroupStart(ctx, &pb.GroupStartRequest{
         CommId: commId,
@@ -107,31 +160,14 @@ func main() {
         log.Fatalf("GroupStart failed: %v", err)
     }
 
-    // Execute AllReduceRing (Part 1) --> add everything
     memAddrs := make(map[uint32]*pb.MemAddr)
     for i, gpu := range devices {
         memAddrs[uint32(i)] = gpu.MinMemAddr
     }
 
-    _, err = client.AllReduceRing(ctx, &pb.AllReduceRingRequest{
-        CommId:   commId,
-        Count:    uint64(8 * len(vecs[0])), // 8 bytes per uint64 (i think)
-        Op:       pb.ReduceOp_SUM,
-        MemAddrs: memAddrs,
-    })
-    if err != nil {
-        log.Fatalf("AllReduceRing failed: %v", err)
-    }
-
-    // Execute AllReduceRing (Part 2) --> 3x first 3 bytes
-    _, err = client.AllReduceRing(ctx, &pb.AllReduceRingRequest{
-        CommId:   commId,
-        Count:    uint64(8 * 3), // 8 bytes per uint64 (i think)
-        Op:       pb.ReduceOp_SUM,
-        MemAddrs: memAddrs,
-    })
-    if err != nil {
-        log.Fatalf("AllReduceRing failed: %v", err)
+    // End group
+    for _, op := range ops {
+        reduce(client, algo, ctx, commId, uint64(8 * len(vecs[0])), op, memAddrs)
     }
 
     _, err = client.GroupEnd(ctx, &pb.GroupEndRequest{
@@ -159,9 +195,9 @@ func main() {
         }
     }
     groupDuration := time.Since(groupStart)
-    log.Printf("Group operation took %v to complete", groupDuration)
+    log.Printf("Test %d with %s took %v to complete", test, algo, groupDuration)
 
-    // Loop through devices 0 to N
+    // Loop through devices 0 to N and check results
     for i := range N {
 
         // Perform the Memcpy operation for the current device
