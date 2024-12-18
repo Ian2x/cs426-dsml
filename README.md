@@ -1,9 +1,5 @@
 # CS426 - DSML
 
-## Group Work
-
-## Video Demo (Google Drive)
-
 ## Instructions
 
 To build all the services and export the images, we used Docker Compose:
@@ -19,3 +15,16 @@ These run different test setups.
 
 The `FAIL` environment variable can be set to either `before`, `during`, or `none`.
 This controls whether one GPU is randomly selected to fail before group start, during the group execution, or no failures.
+
+## Video Demo (Google Drive)
+
+## Group Work
+Ian:
+
+setup file structure, made Dockerfiles, 
+
+Josh:
+
+Both:
+
+discussed/worked on implementation details, the RPCs, etc
