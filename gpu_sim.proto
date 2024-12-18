@@ -121,7 +121,7 @@ message CommRemoveDeviceRequest {
 // ADDED:
 message CommRemoveDeviceResponse {
   bool success = 1;
-  repeated DeviceMetadata devices = 2;
+  // repeated DeviceMetadata devices = 2;
 }
 
 // A service that simulates a coordinator that manages multiple GPU devices

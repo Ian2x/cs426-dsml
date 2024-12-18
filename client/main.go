@@ -7,6 +7,7 @@ import (
     "math/rand"
     "os"
 	"strconv"
+    "sync"
 
     pb "github.com/Ian2x/cs426-dsml/proto"
     utl "github.com/Ian2x/cs426-dsml/util"
@@ -16,6 +17,7 @@ import (
 )
 
 func main() {
+    var mu sync.Mutex
     // Parse TEST and ALGO
     testStr := os.Getenv("TEST")
 	if testStr == "" {
@@ -111,8 +113,9 @@ func main() {
         if !commRemoveResp.Success {
             log.Fatalf("CommRemoveDevice was unsuccessful")
         }
-        devices = commRemoveResp.Devices
-        N = N - 1
+        log.Printf("CommRemoveDevice succeeded")
+        // devices = commRemoveResp.Devices
+        // N = N - 1
     }
 
     // Memcpy vectors to each GPU
@@ -170,6 +173,29 @@ func main() {
         log.Fatalf("AllReduceRing failed: %v", err)
     }
 
+    // remove device while ARR is executing
+    if test == 2 {
+        go func() {
+            time.Sleep(100 * time.Millisecond)
+            mu.Lock()
+            randomIndex := uint32(rand.Intn(len(devices)))
+            commRemoveResp, err := client.CommRemoveDevice(
+                context.Background(),
+                &pb.CommRemoveDeviceRequest{
+                    CommId: commId,
+                    Rank: &pb.Rank{Value: randomIndex},
+                },
+            )
+            if err != nil {
+                log.Fatalf("CommRemoveDevice failed: %v", err)
+            }
+            if !commRemoveResp.Success {
+                log.Fatalf("CommRemoveDevice was unsuccessful")
+            }
+            log.Printf("CommRemoveDevice succeeded")
+            mu.Unlock()
+        }()
+    }
     _, err = client.GroupEnd(ctx, &pb.GroupEndRequest{
         CommId: commId,
     })

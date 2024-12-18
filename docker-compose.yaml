@@ -8,6 +8,10 @@ services:
       - "8082:8082"
     command: ["./gpu_coordinator_server", "--config_file=/app/config.json", "--port=8082"]
     # ^ override CMD from the Dockerfile
+    depends_on:
+      - etcd
+    environment:
+      - ETCD_ENDPOINTS=http://etcd:2379 # etcd endpoint for the coordinator
 
   gpu_device_0:
     build:
@@ -61,3 +65,16 @@ services:
       - gpu_device_2
       - gpu_device_3
     command: ["--config_file=/app/config.json"]
+
+  etcd:
+    image: bitnami/etcd:latest
+    container_name: etcd
+    ports:
+      - "2379:2379" # Client communication port
+      - "2380:2380" # Peer communication port
+    environment:
+      - ALLOW_NONE_AUTHENTICATION=yes # Disable authentication for simplicity
+      - ETCD_ADVERTISE_CLIENT_URLS=http://0.0.0.0:2379
+      - ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379
+      - ETCD_INITIAL_ADVERTISE_PEER_URLS=http://0.0.0.0:2380
+      - ETCD_LISTEN_PEER_URLS=http://0.0.0.0:2380
