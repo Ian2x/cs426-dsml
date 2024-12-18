@@ -128,6 +128,13 @@ services:
       - gpu_device_1
       - gpu_device_2
       - gpu_device_3
+      - gpu_device_4
+      - gpu_device_5
+      - gpu_device_6
+      - gpu_device_7
+      - gpu_device_8
+      - gpu_device_9
+      - gpu_device_10
     command: ["--config_file=/app/config.json"]
 
   etcd:
@@ -138,7 +145,7 @@ services:
       - "2380:2380" # Peer communication port
     environment:
       - ALLOW_NONE_AUTHENTICATION=yes # Disable authentication for simplicity
-      - ETCD_ADVERTISE_CLIENT_URLS=http://0.0.0.0:2379
-      - ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379
-      - ETCD_INITIAL_ADVERTISE_PEER_URLS=http://0.0.0.0:2380
-      - ETCD_LISTEN_PEER_URLS=http://0.0.0.0:2380
+      - ETCD_ADVERTISE_CLIENT_URLS=http://etcd:2379
+      - ETCD_LISTEN_CLIENT_URLS=http://etcd:2379
+      - ETCD_INITIAL_ADVERTISE_PEER_URLS=http://etcd:2380
+      - ETCD_LISTEN_PEER_URLS=http://etcd:2380

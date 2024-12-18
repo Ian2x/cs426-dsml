@@ -2,8 +2,12 @@
 
 ## Instructions
 
+
+
 To build all the services and export the images, we used Docker Compose:
-`sudo docker-compose build`
+`sudo docker-compose build`.
+
+- May have to run `sudo apk add build-base` and `sudo go get go.etcd.io/etcd/client/v3` first.
 
 To launch the Docker Compose stack:
 `ALGO=test TEST=0 FAIL=DURING sudo -E docker-compose up`
@@ -21,10 +25,12 @@ This controls whether one GPU is randomly selected to fail before group start, d
 ## Group Work
 Ian:
 
-setup file structure, made Dockerfiles, 
+Set up the file structure, made Dockerfiles, implemented AllReduce algorithm.
 
 Josh:
 
+Implemented AllReduceRing algorithm, implemented failure detection + recovery.
+
 Both:
 
-discussed/worked on implementation details, the RPCs, etc
+Discussed/worked on implementation details, the RPCs, etc.

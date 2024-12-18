@@ -48,7 +48,7 @@ func main() {
 		test = 0
 	}
     switch test {
-    case 1, 2:
+    case 1, 2, 3, 4:
     default:
         log.Printf("TEST not properly set -> using default value (1)")
         test = 1
