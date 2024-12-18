@@ -20,7 +20,6 @@ type GpuCoordinatorServer struct {
 
     // Devices and Communicators
     Devices        map[uint64]*utl.DeviceConfig       // DeviceID to DeviceConfig
-    RankToDeviceID map[uint32]uint64              // Rank to DeviceID
     Communicators  map[uint64]*communicator       // CommID to Communicator
 
     // Other state
@@ -31,14 +30,17 @@ type GpuCoordinatorServer struct {
     // ADDED: timeouts for each device
     deviceTimeouts map[uint64]time.Time           // DeviceID to timeout
     addDuration time.Duration
+    // ADDED: device health
+    deviceHealth   map[uint64]bool                // DeviceID to health
 }
 
 type communicator struct {
     commID       uint64
-    devices      map[uint32]*utl.DeviceConfig // Rank to DeviceConfig
+    rankToDeviceId map[uint32]uint64              // Rank to DeviceID
     groupStarted bool
     opQueue      []operation
     status       pb.Status
+    opsCompleted uint64
 }
 
 type operation struct {
@@ -49,17 +51,19 @@ type operation struct {
 func MakeGPUCoordinatorServer() *GpuCoordinatorServer{
     server := GpuCoordinatorServer{
         Devices:        make(map[uint64]*utl.DeviceConfig),
-        RankToDeviceID: make(map[uint32]uint64),
         Communicators:  make(map[uint64]*communicator),
         NextCommID:     1,
         DeviceTimeouts: make(map[uint64]time.Time),
         addDuration:    1000 * time.Millisecond,
+        deviceHealth:   make(map[uint64]bool)
     }
 
-    // set timeouts
     t := time.Now()
     for _, d := range server.Devices {
+        // set timeouts
         server.deviceTimeouts[d.DeviceID] = t + server.addDuration
+        // set health to true
+        server.deviceHealth[d.DeviceID] = true
     }
 
     go server.checkExpired()
@@ -110,7 +114,7 @@ func (s *GpuCoordinatorServer) CommInit(ctx context.Context, req *pb.CommInitReq
             MaxMemAddr: &pb.MemAddr{Value: device.MaxMemAddr},
         })
 
-        s.RankToDeviceID[rank] = device.DeviceID
+        communicator.rankToDeviceId[rank] = device.DeviceID
         rank++
     }
 
@@ -369,14 +373,12 @@ func (s *GpuCoordinatorServer) executeAllReduceRing(req *pb.AllReduceRingRequest
     }
     s.Mu.Unlock()
 
-    // TODO: need to fix the way we index over devices if we remove expired ones
-    // POSSIBLE FIX: check health of every device before performing operations
-    for rank := range communicator.devices {
+    for rank := range communicator.rankToDeviceId {
         // read in device memory and store it
         stream, err := deviceClients[rank].MemcpyDeviceToHost(
             context.Background(),
             &pb.MemcpyDeviceToHostRequest{
-                SrcDeviceId: pb.DeviceId{Value: s.RankToDeviceID[rank]},
+                SrcDeviceId: pb.DeviceId{Value: communicator.RankToDeviceId[rank]},
                 SrcMemAddr: pb.MemAddr{Value: req.MemAddrs[rank]},
                 NumBytes: req.NumBytes,
             }
@@ -461,12 +463,38 @@ func (s *GpuCoordinatorServer) executeAllReduceRing(req *pb.AllReduceRingRequest
                     break DrainErrors
                 }
             }
-            s.handleErrors(errs)
+            s.handleErrors(errs, &communicator)
         }
     }
     close(errCh)
     
     return nil
+}
+
+func (s *GpuCoordinatorServer) handleErrors(errs []*utl.DeviceError, comm *communicator) {
+    for _, err := range errs {
+        id := comm.RankToDeviceId[err.Rank]
+        // set unhealthy
+        s.deviceHealth[id] = false
+        // remove from communicator
+        delete(comm.rankToDeviceId, err.Rank)
+    }
+    // get all deviceIds of communicator
+    ids := make([]uint64)
+    for _, id := range comm.rankToDeviceId {
+        ids = append(ids, id)
+    }
+    // create new rank to id mapping
+    comm.rankToDeviceId = make(map[uint32]uint64)
+    for i := range ids {
+        comm.rankToDeviceId[i] = ids[i]
+    }
+    // update opQueue based on ops completed
+    comm.opQueue = comm.opQueue[comm.opsCompleted:]
+    // start group
+
+    // end group
+
 }
 
 func (s *GpuCoordinatorServer) Memcpy(ctx context.Context, req *pb.MemcpyRequest) (*pb.MemcpyResponse, error) {
