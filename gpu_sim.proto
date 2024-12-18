@@ -112,11 +112,26 @@ message HeartbeatResponse {
   bool success = 1;
 }
 
+// ADDED:
+message CommRemoveDeviceRequest {
+  uint64 commId = 1;
+  Rank rank = 2;
+}
+
+// ADDED:
+message CommRemoveDeviceResponse {
+  bool success = 1;
+  // repeated DeviceMetadata devices = 2;
+}
+
 // A service that simulates a coordinator that manages multiple GPU devices
 service GPUCoordinator {
   rpc CommInit(CommInitRequest) returns (CommInitResponse) {}
   rpc GetCommStatus(GetCommStatusRequest) returns (GetCommStatusResponse) {}
   // You may choose to implement CommFinalize and CommDestroy RPCs
+
+  // ADDED:
+  rpc CommRemoveDevice(CommRemoveDeviceRequest) returns (CommRemoveDeviceResponse) {}
 
   // Group operations wrapper
   rpc GroupStart(GroupStartRequest) returns (GroupStartResponse) {}
@@ -125,7 +140,6 @@ service GPUCoordinator {
   // RPCs for group or peer-to-peer communication
   rpc AllReduceRing(AllReduceRingRequest) returns (AllReduceRingResponse) {}
   rpc AllReduce(AllReduceRequest) returns (AllReduceResponse) {} // WE ADDED
-  rpc TreePacking(TreePackingRequest) returns (TreePackingResponse) {} // WE ADDED
 
   // Host-to-device data transfer and vice versa
   // You may implement this as streaming as well
@@ -204,18 +218,6 @@ message AllReduceRequest {
 }
 
 message AllReduceResponse {
-  bool success = 1;
-}
-
-message TreePackingRequest {
-  uint64 commId = 1;
-  uint64 count = 2;
-  ReduceOp op = 3;
-  // Rank -> MemAddr; protobuf doesn't support message type keys or type aliases
-  map<uint32, MemAddr> memAddrs = 4;
-}
-
-message TreePackingResponse {
   bool success = 1;
 }
 

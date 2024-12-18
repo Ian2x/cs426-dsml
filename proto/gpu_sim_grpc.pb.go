@@ -355,15 +355,15 @@ var GPUDevice_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	GPUCoordinator_CommInit_FullMethodName      = "/gpu_sim.GPUCoordinator/CommInit"
-	GPUCoordinator_GetCommStatus_FullMethodName = "/gpu_sim.GPUCoordinator/GetCommStatus"
-	GPUCoordinator_GroupStart_FullMethodName    = "/gpu_sim.GPUCoordinator/GroupStart"
-	GPUCoordinator_GroupEnd_FullMethodName      = "/gpu_sim.GPUCoordinator/GroupEnd"
-	GPUCoordinator_AllReduceRing_FullMethodName = "/gpu_sim.GPUCoordinator/AllReduceRing"
-	GPUCoordinator_AllReduce_FullMethodName     = "/gpu_sim.GPUCoordinator/AllReduce"
-	GPUCoordinator_TreePacking_FullMethodName   = "/gpu_sim.GPUCoordinator/TreePacking"
-	GPUCoordinator_Memcpy_FullMethodName        = "/gpu_sim.GPUCoordinator/Memcpy"
-	GPUCoordinator_Heartbeat_FullMethodName     = "/gpu_sim.GPUCoordinator/Heartbeat"
+	GPUCoordinator_CommInit_FullMethodName         = "/gpu_sim.GPUCoordinator/CommInit"
+	GPUCoordinator_GetCommStatus_FullMethodName    = "/gpu_sim.GPUCoordinator/GetCommStatus"
+	GPUCoordinator_CommRemoveDevice_FullMethodName = "/gpu_sim.GPUCoordinator/CommRemoveDevice"
+	GPUCoordinator_GroupStart_FullMethodName       = "/gpu_sim.GPUCoordinator/GroupStart"
+	GPUCoordinator_GroupEnd_FullMethodName         = "/gpu_sim.GPUCoordinator/GroupEnd"
+	GPUCoordinator_AllReduceRing_FullMethodName    = "/gpu_sim.GPUCoordinator/AllReduceRing"
+	GPUCoordinator_AllReduce_FullMethodName        = "/gpu_sim.GPUCoordinator/AllReduce"
+	GPUCoordinator_Memcpy_FullMethodName           = "/gpu_sim.GPUCoordinator/Memcpy"
+	GPUCoordinator_Heartbeat_FullMethodName        = "/gpu_sim.GPUCoordinator/Heartbeat"
 )
 
 // GPUCoordinatorClient is the client API for GPUCoordinator service.
@@ -374,13 +374,14 @@ const (
 type GPUCoordinatorClient interface {
 	CommInit(ctx context.Context, in *CommInitRequest, opts ...grpc.CallOption) (*CommInitResponse, error)
 	GetCommStatus(ctx context.Context, in *GetCommStatusRequest, opts ...grpc.CallOption) (*GetCommStatusResponse, error)
+	// ADDED:
+	CommRemoveDevice(ctx context.Context, in *CommRemoveDeviceRequest, opts ...grpc.CallOption) (*CommRemoveDeviceResponse, error)
 	// Group operations wrapper
 	GroupStart(ctx context.Context, in *GroupStartRequest, opts ...grpc.CallOption) (*GroupStartResponse, error)
 	GroupEnd(ctx context.Context, in *GroupEndRequest, opts ...grpc.CallOption) (*GroupEndResponse, error)
 	// RPCs for group or peer-to-peer communication
 	AllReduceRing(ctx context.Context, in *AllReduceRingRequest, opts ...grpc.CallOption) (*AllReduceRingResponse, error)
 	AllReduce(ctx context.Context, in *AllReduceRequest, opts ...grpc.CallOption) (*AllReduceResponse, error)
-	TreePacking(ctx context.Context, in *TreePackingRequest, opts ...grpc.CallOption) (*TreePackingResponse, error)
 	// Host-to-device data transfer and vice versa
 	// You may implement this as streaming as well
 	Memcpy(ctx context.Context, in *MemcpyRequest, opts ...grpc.CallOption) (*MemcpyResponse, error)
@@ -410,6 +411,16 @@ func (c *gPUCoordinatorClient) GetCommStatus(ctx context.Context, in *GetCommSta
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetCommStatusResponse)
 	err := c.cc.Invoke(ctx, GPUCoordinator_GetCommStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gPUCoordinatorClient) CommRemoveDevice(ctx context.Context, in *CommRemoveDeviceRequest, opts ...grpc.CallOption) (*CommRemoveDeviceResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CommRemoveDeviceResponse)
+	err := c.cc.Invoke(ctx, GPUCoordinator_CommRemoveDevice_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -456,16 +467,6 @@ func (c *gPUCoordinatorClient) AllReduce(ctx context.Context, in *AllReduceReque
 	return out, nil
 }
 
-func (c *gPUCoordinatorClient) TreePacking(ctx context.Context, in *TreePackingRequest, opts ...grpc.CallOption) (*TreePackingResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(TreePackingResponse)
-	err := c.cc.Invoke(ctx, GPUCoordinator_TreePacking_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *gPUCoordinatorClient) Memcpy(ctx context.Context, in *MemcpyRequest, opts ...grpc.CallOption) (*MemcpyResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(MemcpyResponse)
@@ -494,13 +495,14 @@ func (c *gPUCoordinatorClient) Heartbeat(ctx context.Context, in *HeartbeatReque
 type GPUCoordinatorServer interface {
 	CommInit(context.Context, *CommInitRequest) (*CommInitResponse, error)
 	GetCommStatus(context.Context, *GetCommStatusRequest) (*GetCommStatusResponse, error)
+	// ADDED:
+	CommRemoveDevice(context.Context, *CommRemoveDeviceRequest) (*CommRemoveDeviceResponse, error)
 	// Group operations wrapper
 	GroupStart(context.Context, *GroupStartRequest) (*GroupStartResponse, error)
 	GroupEnd(context.Context, *GroupEndRequest) (*GroupEndResponse, error)
 	// RPCs for group or peer-to-peer communication
 	AllReduceRing(context.Context, *AllReduceRingRequest) (*AllReduceRingResponse, error)
 	AllReduce(context.Context, *AllReduceRequest) (*AllReduceResponse, error)
-	TreePacking(context.Context, *TreePackingRequest) (*TreePackingResponse, error)
 	// Host-to-device data transfer and vice versa
 	// You may implement this as streaming as well
 	Memcpy(context.Context, *MemcpyRequest) (*MemcpyResponse, error)
@@ -522,6 +524,9 @@ func (UnimplementedGPUCoordinatorServer) CommInit(context.Context, *CommInitRequ
 func (UnimplementedGPUCoordinatorServer) GetCommStatus(context.Context, *GetCommStatusRequest) (*GetCommStatusResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetCommStatus not implemented")
 }
+func (UnimplementedGPUCoordinatorServer) CommRemoveDevice(context.Context, *CommRemoveDeviceRequest) (*CommRemoveDeviceResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CommRemoveDevice not implemented")
+}
 func (UnimplementedGPUCoordinatorServer) GroupStart(context.Context, *GroupStartRequest) (*GroupStartResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GroupStart not implemented")
 }
@@ -533,9 +538,6 @@ func (UnimplementedGPUCoordinatorServer) AllReduceRing(context.Context, *AllRedu
 }
 func (UnimplementedGPUCoordinatorServer) AllReduce(context.Context, *AllReduceRequest) (*AllReduceResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method AllReduce not implemented")
-}
-func (UnimplementedGPUCoordinatorServer) TreePacking(context.Context, *TreePackingRequest) (*TreePackingResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method TreePacking not implemented")
 }
 func (UnimplementedGPUCoordinatorServer) Memcpy(context.Context, *MemcpyRequest) (*MemcpyResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Memcpy not implemented")
@@ -596,6 +598,24 @@ func _GPUCoordinator_GetCommStatus_Handler(srv interface{}, ctx context.Context,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(GPUCoordinatorServer).GetCommStatus(ctx, req.(*GetCommStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GPUCoordinator_CommRemoveDevice_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CommRemoveDeviceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GPUCoordinatorServer).CommRemoveDevice(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GPUCoordinator_CommRemoveDevice_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GPUCoordinatorServer).CommRemoveDevice(ctx, req.(*CommRemoveDeviceRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -672,24 +692,6 @@ func _GPUCoordinator_AllReduce_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
-func _GPUCoordinator_TreePacking_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(TreePackingRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(GPUCoordinatorServer).TreePacking(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: GPUCoordinator_TreePacking_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(GPUCoordinatorServer).TreePacking(ctx, req.(*TreePackingRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _GPUCoordinator_Memcpy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(MemcpyRequest)
 	if err := dec(in); err != nil {
@@ -742,6 +744,10 @@ var GPUCoordinator_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _GPUCoordinator_GetCommStatus_Handler,
 		},
 		{
+			MethodName: "CommRemoveDevice",
+			Handler:    _GPUCoordinator_CommRemoveDevice_Handler,
+		},
+		{
 			MethodName: "GroupStart",
 			Handler:    _GPUCoordinator_GroupStart_Handler,
 		},
@@ -756,10 +762,6 @@ var GPUCoordinator_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AllReduce",
 			Handler:    _GPUCoordinator_AllReduce_Handler,
-		},
-		{
-			MethodName: "TreePacking",
-			Handler:    _GPUCoordinator_TreePacking_Handler,
 		},
 		{
 			MethodName: "Memcpy",

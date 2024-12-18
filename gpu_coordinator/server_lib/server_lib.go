@@ -14,6 +14,8 @@ import (
     "io"
 
     utl "github.com/Ian2x/cs426-dsml/util"
+
+    "go.etcd.io/etcd/client/v3"
 )
 
 // GpuCoordinatorServer implements the GPUCoordinator service
@@ -34,6 +36,8 @@ type GpuCoordinatorServer struct {
     AddDuration time.Duration
     // ADDED: device health
     DeviceHealth   map[uint64]bool                // DeviceID to health
+
+    EtcdClient *clientv3.Client             // etcd
 }
 
 type communicator struct {
@@ -44,6 +48,8 @@ type communicator struct {
     status       pb.Status
     opsCompleted uint64
     deviceMem    map[uint32][]byte          // ADDED: rank to device memory (from client)
+
+    removed      uint32  // ADDED for testing
 }
 
 type operation struct {
@@ -51,7 +57,39 @@ type operation struct {
     opReq    interface{}
 }
 
+func (s *GpuCoordinatorServer) SaveCheckpoint(ctx context.Context, key string, data string) error {
+	_, err := s.EtcdClient.Put(ctx, key, data)
+	if err != nil {
+		log.Printf("Failed to save checkpoint: %v", err)
+		return err
+	}
+	log.Printf("Checkpoint saved with key: %s", key)
+	return nil
+}
+
+func (s *GpuCoordinatorServer) GetCheckpoint(ctx context.Context, key string) (string, error) {
+	resp, err := s.EtcdClient.Get(ctx, key)
+	if err != nil {
+		log.Printf("Failed to retrieve checkpoint: %v", err)
+		return "", err
+	}
+	if len(resp.Kvs) == 0 {
+		return "", nil // Key not found
+	}
+	return string(resp.Kvs[0].Value), nil
+}
+
+
 func MakeGPUCoordinatorServer() *GpuCoordinatorServer{
+    // etcd client
+    cli, err := clientv3.New(clientv3.Config{
+		Endpoints:   []string{"http://etcd:2379"},
+		DialTimeout: 5 * time.Second,
+	})
+	if err != nil {
+		return nil
+	}
+
     server := GpuCoordinatorServer{
         Devices:        make(map[uint64]*utl.DeviceConfig),
         Communicators:  make(map[uint64]*communicator),
@@ -59,6 +97,7 @@ func MakeGPUCoordinatorServer() *GpuCoordinatorServer{
         DeviceTimeouts: make(map[uint64]time.Time),
         AddDuration:    1000 * time.Millisecond,
         DeviceHealth:   make(map[uint64]bool),
+        EtcdClient:     cli,
     }
 
     server.Mu.Lock()
@@ -101,6 +140,7 @@ func (s *GpuCoordinatorServer) CommInit(ctx context.Context, req *pb.CommInitReq
         opQueue: make([]operation, 0, req.NumDevices * 100),
         status: pb.Status_IN_PROGRESS,
         deviceMem: make(map[uint32][]byte),
+        removed: uint32(0xffffffff),
     }
 
     var devicesMetadata []*pb.DeviceMetadata
@@ -133,6 +173,51 @@ func (s *GpuCoordinatorServer) CommInit(ctx context.Context, req *pb.CommInitReq
         Success: true,
         CommId:  commID,
         Devices: devicesMetadata,
+    }, nil
+}
+
+func (s *GpuCoordinatorServer) CommRemoveDevice(ctx context.Context, req *pb.CommRemoveDeviceRequest) (*pb.CommRemoveDeviceResponse, error) {
+    s.Mu.Lock()
+    defer s.Mu.Unlock()
+    // req arguments
+    commId := req.CommId
+    rank := req.Rank.Value
+    // check if comm exists
+    comm, exists := s.Communicators[commId]
+    if !exists {
+        return nil, fmt.Errorf("Communicator %d not found", commId)
+    }
+    if len(comm.rankToDeviceId) <= 1 {
+        return nil, fmt.Errorf("Communicator %d only has %d devices", commId, len(comm.rankToDeviceId))
+    }
+    comm.removed = rank
+    // // remove device rank
+    // delete(comm.rankToDeviceId, rank)
+    // // get all deviceIds of communicator
+    // ids := make([]uint64, 0)
+    // for r, id := range comm.rankToDeviceId {
+    //     if r != rank {
+    //         ids = append(ids, id)
+    //     }
+    // }
+    // // create new rank to id mapping
+    // comm.rankToDeviceId = make(map[uint32]uint64)
+    // for i := uint32(0); i < uint32(len(ids)); i++ {
+    //     comm.rankToDeviceId[i] = ids[i]
+    // }
+    // // create devicesMetadata
+    // var devicesMetadata []*pb.DeviceMetadata
+    // for _, deviceId := range comm.rankToDeviceId {
+    //     devicesMetadata = append(devicesMetadata, &pb.DeviceMetadata{
+    //         DeviceId:   &pb.DeviceId{Value: deviceId},
+    //         MinMemAddr: &pb.MemAddr{Value: s.Devices[deviceId].MinMemAddr},
+    //         MaxMemAddr: &pb.MemAddr{Value: s.Devices[deviceId].MaxMemAddr},
+    //     })
+    // }
+    // return
+    return &pb.CommRemoveDeviceResponse{
+        Success: true,
+        // Devices: devicesMetadata,
     }, nil
 }
 
@@ -221,11 +306,6 @@ func (s *GpuCoordinatorServer) executeOps(queuedOps []operation, comm *communica
                 if err := s.executeAllReduce(allReduceRequest); err != nil {
                     return
                 }
-            case "TreePacking":
-                treePackingRequest := op.opReq.(*pb.TreePackingRequest)
-                if err := s.executeTreePacking(treePackingRequest); err != nil {
-                    return
-                }
             default:
                 errCh <- fmt.Errorf("Unknown operation type: %v", op.opType)
         }
@@ -298,34 +378,6 @@ func (s *GpuCoordinatorServer) AllReduce(ctx context.Context, req *pb.AllReduceR
     }
 
     return &pb.AllReduceResponse{
-        Success: true,
-    }, nil
-}
-
-func (s *GpuCoordinatorServer) TreePacking(ctx context.Context, req *pb.TreePackingRequest) (*pb.TreePackingResponse, error) {
-    s.Mu.RLock()
-    communicator, exists := s.Communicators[req.CommId]
-    if !exists {
-        s.Mu.RUnlock()
-        return nil, fmt.Errorf("Communicator %d not found", req.CommId)
-    }
-    s.Mu.RUnlock()
-    
-    s.Mu.Lock()
-    if communicator.groupStarted { // If groupStarted, queue the operation.
-        communicator.opQueue = append(communicator.opQueue, operation{
-            opType: "TreePacking",
-            opReq:  req,
-        })
-        s.Mu.Unlock()
-    } else { // Else, executed immediately
-        s.Mu.Unlock()
-        if err := s.executeTreePacking(req); err != nil {
-            return nil, err
-        }
-    }
-
-    return &pb.TreePackingResponse{
         Success: true,
     }, nil
 }
@@ -519,15 +571,21 @@ func (s *GpuCoordinatorServer) executeAllReduceRing(req *pb.AllReduceRingRequest
                 srcBuffAddr := uint64(memAddrs[srcRank].Value + offset)
                 dstBuffAddr := uint64(memAddrs[dstRank].Value + offset)
                 
-                // invoke beginShare
-                wg.Add(1)
-                go s.beginShare(
-                    srcRank, srcBuffAddr,
-                    dstRank, dstBuffAddr,
-                    bytesPerReq, deviceClients,
-                    communicator.rankToDeviceId,
-                    reduceOp, errCh, &wg,
-                )
+                // FOR TESTING
+                if dstRank == communicator.removed {
+                    log.Printf("Device %d removed from cluster (testing)", dstRank)
+                    errCh <- utl.DeviceErrorf("Device removed from cluster (testing)", dstRank)
+                } else {
+                    // invoke beginShare
+                    wg.Add(1)
+                    go s.beginShare(
+                        srcRank, srcBuffAddr,
+                        dstRank, dstBuffAddr,
+                        bytesPerReq, deviceClients,
+                        communicator.rankToDeviceId,
+                        reduceOp, errCh, &wg,
+                    )
+                }
             }
             wg.Wait()
 
@@ -543,6 +601,7 @@ func (s *GpuCoordinatorServer) executeAllReduceRing(req *pb.AllReduceRingRequest
                 }
             }
             if len(errs) > 0 {
+                close(errCh)
                 s.handleErrors(errs, communicator)
                 return fmt.Errorf("At least one device unresponsive... Restarting.")
             }
@@ -782,10 +841,6 @@ func (s *GpuCoordinatorServer) executeAllReduce(req *pb.AllReduceRequest) error 
     return nil
 }
 
-func (s *GpuCoordinatorServer) executeTreePacking(req *pb.TreePackingRequest) error {
-    return nil
-}
-
 // NOTE: need to ensure that previous call to groupEnd (where the
 // original goroutine with the loop over queuedOps) has terminated
 func (s *GpuCoordinatorServer) handleErrors(errs []*utl.DeviceError, comm *communicator) {
@@ -795,8 +850,8 @@ func (s *GpuCoordinatorServer) handleErrors(errs []*utl.DeviceError, comm *commu
         // set unhealthy
         s.DeviceHealth[id] = false
         // remove from communicator
-        log.Printf("Would remove unhealthy %d from communicator", id)
-        // delete(comm.rankToDeviceId, err.Rank)
+        log.Printf("Removing unhealthy %d from communicator", id)
+        delete(comm.rankToDeviceId, err.Rank)
     }
     // get all deviceIds of communicator
     ids := make([]uint64, 0)
@@ -812,6 +867,7 @@ func (s *GpuCoordinatorServer) handleErrors(errs []*utl.DeviceError, comm *commu
     comm.opQueue = comm.opQueue[comm.opsCompleted:]
     // restart execution
     queuedOps := comm.opQueue
+    comm.removed = uint32(0xffffffff)
     go s.executeOps(queuedOps, comm)
     s.Mu.Unlock()
 }

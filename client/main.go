@@ -4,9 +4,10 @@ import (
     "context"
     "log"
     "time"
-    // "math"
+    "math/rand"
     "os"
 	"strconv"
+    "sync"
 
     pb "github.com/Ian2x/cs426-dsml/proto"
     utl "github.com/Ian2x/cs426-dsml/util"
@@ -18,7 +19,6 @@ import (
 func reduce(client pb.GPUCoordinatorClient, algo string, ctx context.Context, commId uint64, count uint64, op pb.ReduceOp, memAddrs map[uint32]*pb.MemAddr) {
     var err error
     switch algo {
-    // case "treepacking":
     case "allreduce":
         _, err = client.AllReduce(ctx, &pb.AllReduceRequest{
             CommId:   commId,
@@ -40,6 +40,7 @@ func reduce(client pb.GPUCoordinatorClient, algo string, ctx context.Context, co
 }
 
 func main() {
+    var mu sync.Mutex
     // Parse TEST and ALGO
     testStr := os.Getenv("TEST")
 	test, err := strconv.Atoi(testStr)
@@ -54,7 +55,7 @@ func main() {
     }
     algo := os.Getenv("ALGO")
     switch algo {
-    case "allreduce", "allreducering", "treepacking":
+    case "allreduce", "allreducering":
     default:
         log.Printf("ALGO not properly set -> using default value (allreducering)")
         algo = "allreducering"
@@ -132,6 +133,27 @@ func main() {
     commId := commInitResp.CommId
     devices := commInitResp.Devices
 
+    // remove a device before group starts
+    if test == 1 {
+        randomIndex := uint32(rand.Intn(len(devices)))
+        commRemoveResp, err := client.CommRemoveDevice(
+            context.Background(),
+            &pb.CommRemoveDeviceRequest{
+                CommId: commId,
+                Rank: &pb.Rank{Value: randomIndex},
+            },
+        )
+        if err != nil {
+            log.Fatalf("CommRemoveDevice failed: %v", err)
+        }
+        if !commRemoveResp.Success {
+            log.Fatalf("CommRemoveDevice was unsuccessful")
+        }
+        log.Printf("CommRemoveDevice succeeded")
+        // devices = commRemoveResp.Devices
+        // N = N - 1
+    }
+
     // Memcpy vectors to each GPU
     for i := 0; i < N; i++ {
         gpu := devices[i]
@@ -170,6 +192,29 @@ func main() {
         reduce(client, algo, ctx, commId, uint64(8 * len(vecs[0])), op, memAddrs)
     }
 
+    // remove device while ARR is executing
+    if test == 2 {
+        go func() {
+            time.Sleep(100 * time.Millisecond)
+            mu.Lock()
+            randomIndex := uint32(rand.Intn(len(devices)))
+            commRemoveResp, err := client.CommRemoveDevice(
+                context.Background(),
+                &pb.CommRemoveDeviceRequest{
+                    CommId: commId,
+                    Rank: &pb.Rank{Value: randomIndex},
+                },
+            )
+            if err != nil {
+                log.Fatalf("CommRemoveDevice failed: %v", err)
+            }
+            if !commRemoveResp.Success {
+                log.Fatalf("CommRemoveDevice was unsuccessful")
+            }
+            log.Printf("CommRemoveDevice succeeded (%d)", randomIndex)
+            mu.Unlock()
+        }()
+    }
     _, err = client.GroupEnd(ctx, &pb.GroupEndRequest{
         CommId: commId,
     })
