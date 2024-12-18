@@ -58,7 +58,7 @@ message GetDeviceMetadataResponse {
 message BeginSendRequest {
   MemAddr sendBuffAddr = 1;
   uint64 numBytes = 2;
-  Rank dstRank = 3;
+  DeviceId dstId = 3; // CHANGED FROM Rank dstRank
   ReduceOp receiveOp = 4; // WE ADDED
 }
 
@@ -71,7 +71,7 @@ message BeginReceiveRequest {
   StreamId streamId = 1;
   MemAddr recvBuffAddr = 2;
   uint64 numBytes = 3;
-  Rank srcRank = 4;
+  DeviceId srcId = 4; // CHANGED FROM Rank srcRank
 }
 
 message BeginReceiveResponse {

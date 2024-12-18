@@ -31,7 +31,7 @@ type gpuDeviceServer struct {
     // Other state
     coordinator         *utl.CoordinatorConfig
     coordinatorConn     *grpc.ClientConn
-    peers               map[uint32]*PeerInfo
+    peers               map[uint64]*PeerInfo
     nextStreamIndex     uint64
     streams             map[uint64]*streamInfo
     isHealthy           bool
@@ -57,11 +57,11 @@ type streamInfo struct {
     sendBuffAddr  uint64
     recvBuffAddr  uint64
     numBytes      uint64
-    srcRank       uint32
-    dstRank       uint32
+    srcID         uint64
+    dstID         uint64
 }
 
-func MakeGPUDeviceServer(deviceID uint64, coordinatorConfig utl.CoordinatorConfig, peers map[uint32]*PeerInfo) *gpuDeviceServer{
+func MakeGPUDeviceServer(deviceID uint64, coordinatorConfig utl.CoordinatorConfig, peers map[uint64]*PeerInfo) *gpuDeviceServer{
     // establish connection with coordinator
     opts := []grpc.DialOption{
         grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -129,7 +129,7 @@ func (s *gpuDeviceServer) BeginSend(ctx context.Context, req *pb.BeginSendReques
         status: pb.Status_IN_PROGRESS,
         sendBuffAddr: req.SendBuffAddr.Value,
         numBytes: req.NumBytes,
-        dstRank: req.DstRank.Value,
+        dstID: req.DstId.Value,
     }
 
     // Queue the operation
@@ -160,7 +160,7 @@ func (s *gpuDeviceServer) BeginReceive(ctx context.Context, req *pb.BeginReceive
         status: pb.Status_IN_PROGRESS,
         recvBuffAddr: req.RecvBuffAddr.Value,
         numBytes: req.NumBytes,
-        srcRank: req.SrcRank.Value,
+        srcID: req.SrcId.Value,
     }
 
     // Queue the operation
@@ -404,9 +404,9 @@ func (s *gpuDeviceServer) handleSendOperation(streamID uint64, reduceOp pb.Reduc
     }
 
     // Get destination PeerInfo
-    dstPeer, exists := s.peers[streamInfo.dstRank]
+    dstPeer, exists := s.peers[streamInfo.dstID]
     if !exists {
-        log.Printf("Destination rank %d not found", streamInfo.dstRank)
+        log.Printf("Destination ID %d not found", streamInfo.dstID)
         s.mu.Lock()
         s.streams[streamID].status = pb.Status_FAILED
         s.mu.Unlock()
@@ -503,6 +503,6 @@ func (s *gpuDeviceServer) handleSendOperation(streamID uint64, reduceOp pb.Reduc
 
     s.mu.Lock()
     s.streams[streamID].status = pb.Status_SUCCESS
-    log.Printf("StreamSend succeeded (%d --> %d)", s.deviceId, streamInfo.dstRank)
+    log.Printf("StreamSend succeeded (%d --> %d)", s.deviceId, streamInfo.dstID)
     s.mu.Unlock()
 }

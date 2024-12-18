@@ -117,6 +117,7 @@ func (s *GpuCoordinatorServer) CommInit(ctx context.Context, req *pb.CommInitReq
         })
 
         communicator.rankToDeviceId[rank] = device.DeviceID
+        log.Printf("Comm assigning device %d to rank %d", device.DeviceID, rank)
         rank++
     }
 
@@ -291,6 +292,7 @@ func (s *GpuCoordinatorServer) beginShare(
     dstBuffAddr uint64,
     bytesPerReq uint64,
     clients map[uint32]pb.GPUDeviceClient,
+    rankToDeviceId map[uint32]uint64,
     op pb.ReduceOp,
     errCh chan *utl.DeviceError,
     wg *sync.WaitGroup,
@@ -305,40 +307,26 @@ func (s *GpuCoordinatorServer) beginShare(
         &pb.BeginSendRequest{
             SendBuffAddr: &pb.MemAddr{Value: srcBuffAddr},
             NumBytes: bytesPerReq,
-            DstRank: &pb.Rank{Value: dstRank},
+            DstId: &pb.DeviceId{Value: rankToDeviceId[dstRank]},
             ReceiveOp: op,
         },
     )
-    // if beginSendErr != nil {
-    //     log.Fatalf("BeginSend failed: %v", beginSendErr)
-    //     errCh <- beginSendErr
-    //     return
-    // }
     if beginSendErr != nil || !beginSendResp.Initiated {
-        // handle error
-        // errCh <- fmt.Errorf("BeginSend not initiated on rank=%d", srcRank)
         errCh <- utl.DeviceErrorf("BeginSend not initiated", srcRank)
         return
     }
     // invoke beginReceive
-    log.Printf("Invoked send [%d (addr: %d) --> %d (addr: %d)] on streamID %d", srcRank, srcBuffAddr, dstRank, dstBuffAddr, beginSendResp.StreamId.Value)
+    log.Printf("Invoked send [%d (devid: %d, addr: %d) --> %d (devid: %d, addr: %d)] on streamID %d w/ %d bytes", srcRank, rankToDeviceId[srcRank], srcBuffAddr, dstRank, rankToDeviceId[dstRank], dstBuffAddr, beginSendResp.StreamId.Value, bytesPerReq)
     beginRecvResp, beginRecvErr := clients[dstRank].BeginReceive(
         ctx,
         &pb.BeginReceiveRequest{
             StreamId: beginSendResp.StreamId,
             RecvBuffAddr: &pb.MemAddr{Value: dstBuffAddr},
             NumBytes: bytesPerReq,
-            SrcRank: &pb.Rank{Value: srcRank},
+            SrcId: &pb.DeviceId{Value: rankToDeviceId[srcRank]},
         },
     )
-    // if beginRecvErr != nil {
-    //     log.Fatalf("BeginReceive failed: %v", beginRecvErr)
-    //     errCh <- beginRecvErr
-    //     return
-    // }
     if beginRecvErr != nil || !beginRecvResp.Initiated {
-        // handle error
-        // errCh <- fmt.Errorf("BeginReceive not initiated on rank=%d", dstRank)
         errCh <- utl.DeviceErrorf("BeginReceive not initiated", dstRank)
         return
     }
@@ -352,8 +340,6 @@ func (s *GpuCoordinatorServer) beginShare(
         )
         if getStatusErr != nil {
             // not sure how to handle error here. maybe just resend?
-            // log.Printf("GetStreamStatus error on rank=%d: %v", srcRank, getStatusErr)
-            // errCh <- getStatusErr
             errCh <- utl.DeviceErrorf("Stream status FAILED", srcRank)
             return
         }
@@ -362,7 +348,6 @@ func (s *GpuCoordinatorServer) beginShare(
             return
         case pb.Status_FAILED:
             // handle error
-            // errCh <- fmt.Errorf("stream status FAILED on rank=%d", srcRank)
             errCh <- utl.DeviceErrorf("Stream status FAILED", srcRank)
             return
         case pb.Status_IN_PROGRESS:
@@ -468,8 +453,9 @@ func (s *GpuCoordinatorServer) executeAllReduceRing(req *pb.AllReduceRingRequest
                 dstRank := uint32((rank + 1) % numDevices)
 
                 // Calculate addrs for send and receive
-                srcBuffAddr := uint64(memAddrs[srcRank].Value + (bytesPerReq * uint64((srcRank + numDevices - i + phase) % numDevices)) % numBytes)
-                dstBuffAddr := uint64(memAddrs[dstRank].Value + (bytesPerReq * uint64((dstRank + 2 * numDevices - i - 1 + phase) % numDevices)) % numBytes)
+                offset := bytesPerReq * uint64((srcRank + numDevices - i + phase) % numDevices) % numBytes
+                srcBuffAddr := uint64(memAddrs[srcRank].Value + offset)
+                dstBuffAddr := uint64(memAddrs[dstRank].Value + offset)
                 
                 // invoke beginShare
                 wg.Add(1)
@@ -477,6 +463,7 @@ func (s *GpuCoordinatorServer) executeAllReduceRing(req *pb.AllReduceRingRequest
                     srcRank, srcBuffAddr,
                     dstRank, dstBuffAddr,
                     bytesPerReq, deviceClients,
+                    communicator.rankToDeviceId,
                     reduceOp, errCh, &wg,
                 )
             }
@@ -562,6 +549,7 @@ func (s *GpuCoordinatorServer) executeAllReduce(req *pb.AllReduceRequest) error 
                 srcRank, srcBuffAddr,
                 dstRank, dstBuffAddr,
                 numBytes, deviceClients,
+                communicator.rankToDeviceId,
                 op, errCh, &wg,
             )
         }
@@ -570,15 +558,17 @@ func (s *GpuCoordinatorServer) executeAllReduce(req *pb.AllReduceRequest) error 
     wg.Wait()
 
     // empty error channel and read errors
+    errs := make([]*utl.DeviceError, 0)
     DrainErrors:
     for {
         select {
-            case err := <-errCh:
-                log.Printf("Error in executeAllReduce: %v", err)
-            default:
-                break DrainErrors
+        case err := <-errCh:
+            errs = append(errs, err)
+        default:
+            break DrainErrors
         }
     }
+    s.handleErrors(errs, communicator)
 
     close(errCh)
 
@@ -587,12 +577,14 @@ func (s *GpuCoordinatorServer) executeAllReduce(req *pb.AllReduceRequest) error 
 
 
 func (s *GpuCoordinatorServer) handleErrors(errs []*utl.DeviceError, comm *communicator) {
+    return
     for _, err := range errs {
         id := comm.rankToDeviceId[err.Rank]
         // set unhealthy
         s.DeviceHealth[id] = false
         // remove from communicator
-        delete(comm.rankToDeviceId, err.Rank)
+        log.Printf("Would remove unhealthy %d from communicator", id)
+        // delete(comm.rankToDeviceId, err.Rank)
     }
     // get all deviceIds of communicator
     ids := make([]uint64, 0)

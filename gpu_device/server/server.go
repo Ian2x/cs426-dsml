@@ -68,14 +68,14 @@ func main() {
 
     // Process all the deviceConfigs
     var ownConfig *utl.DeviceConfig
-    peers := make(map[uint32]*sl.PeerInfo)
-    for i, deviceConfig := range deviceConfigs {
-        rank := uint32(i)
+    peers := make(map[uint64]*sl.PeerInfo)
+    for _, deviceConfig := range deviceConfigs {
+        otherDeviceID := deviceConfig.DeviceID
 
-        if deviceConfig.DeviceID == uint64(*deviceID) {
+        if otherDeviceID == uint64(*deviceID) {
             ownConfig = &deviceConfig
         } else {
-            peers[rank] = &sl.PeerInfo{
+            peers[otherDeviceID] = &sl.PeerInfo{
                 IpAddress: deviceConfig.IPAddress,
                 Port:      deviceConfig.Port,
             }
@@ -97,10 +97,6 @@ func main() {
     pb.RegisterGPUDeviceServer(s, sl.MakeGPUDeviceServer(uint64(*deviceID), coordinatorConfig, peers))
 
 	log.Printf("GPU Device server (device ID: %d) listening at %v", *deviceID, lis.Addr())
-
-    localIP := getLocalIP()
-    log.Printf("Device ID %d initialized with IP address: %s", *deviceID, localIP)
-
 
 	if err := s.Serve(lis); err != nil {
 		log.Fatalf("Failed to serve: %v", err)
